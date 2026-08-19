@@ -1,0 +1,104 @@
+# Two OpenAI-compatible mock upstreams, deployed identically into both clusters.
+#
+# Two rather than one so the comparison can exercise model-based routing and
+# failover: "alpha" answers immediately, "beta" adds 250ms so latency-sensitive
+# policy differences actually show up in the numbers.
+#
+# The ConfigMap holding server.py is generated from mock-llm/server.py by
+# scripts/deploy-mock-llm.sh -- server.py is the single source of truth.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-llm-alpha
+  namespace: ai-demo
+  labels: {app: mock-llm, upstream: alpha}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mock-llm, upstream: alpha}
+  template:
+    metadata:
+      labels: {app: mock-llm, upstream: alpha}
+    spec:
+      containers:
+        - name: server
+          image: python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/srv/server.py"]
+          env:
+            - {name: MODEL_NAME,  value: "mock-gpt-4o"}
+            - {name: UPSTREAM_ID, value: "alpha"}
+            - {name: LATENCY_MS,  value: "0"}
+            - {name: PORT,        value: "8080"}
+          ports: [{name: http, containerPort: 8080}]
+          volumeMounts: [{name: src, mountPath: /srv}]
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 25m, memory: 48Mi}
+            limits: {memory: 192Mi}
+      volumes:
+        - name: src
+          configMap: {name: mock-llm-src}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-llm-beta
+  namespace: ai-demo
+  labels: {app: mock-llm, upstream: beta}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mock-llm, upstream: beta}
+  template:
+    metadata:
+      labels: {app: mock-llm, upstream: beta}
+    spec:
+      containers:
+        - name: server
+          image: python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/srv/server.py"]
+          env:
+            - {name: MODEL_NAME,  value: "mock-claude"}
+            - {name: UPSTREAM_ID, value: "beta"}
+            - {name: LATENCY_MS,  value: "250"}
+            - {name: PORT,        value: "8080"}
+          ports: [{name: http, containerPort: 8080}]
+          volumeMounts: [{name: src, mountPath: /srv}]
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 25m, memory: 48Mi}
+            limits: {memory: 192Mi}
+      volumes:
+        - name: src
+          configMap: {name: mock-llm-src}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-llm-alpha
+  namespace: ai-demo
+spec:
+  selector: {app: mock-llm, upstream: alpha}
+  ports: [{name: http, port: 80, targetPort: 8080, appProtocol: http}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-llm-beta
+  namespace: ai-demo
+spec:
+  selector: {app: mock-llm, upstream: beta}
+  ports: [{name: http, port: 80, targetPort: 8080, appProtocol: http}]

@@ -1,0 +1,26 @@
+# Overlay for agentgateway v1.4.1 on a single-node kind cluster.
+# Defaults live in agentgateway-v1.4.1.default.yaml -- only deltas here.
+
+controller:
+  logLevel: info
+  replicaCount: 1
+
+# The AgentgatewayModel API is agentgateway's LLM-routing surface -- the closest
+# analogue to Envoy AI Gateway's AIGatewayRoute. It ships disabled, so an
+# apples-to-apples AI comparison has to turn it on explicitly.
+agentgatewayModels:
+  enabled: true
+
+# Gateway API Inference Extension (InferencePool). Off by default; enabling it
+# lets us compare model-aware load balancing on both sides.
+inferenceExtension:
+  enabled: false
+
+resources:
+  requests: {cpu: 50m, memory: 96Mi}
+  limits: {memory: 512Mi}
+
+# Requires Prometheus Operator CRDs, which this kind cluster does not have.
+# Proxy metrics are still scrapeable directly on pod port 15020.
+monitoring:
+  enabled: false

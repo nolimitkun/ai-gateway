@@ -1,0 +1,44 @@
+# AgentgatewayModel is a single resource that binds: which model name to match,
+# which upstream serves it, and which API formats it exposes. On the Envoy side
+# the same job takes three resources (Backend + AIServiceBackend + AIGatewayRoute).
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: mock-alpha
+  namespace: ai-demo
+spec:
+  provider: Custom
+  match:
+    model: mock-gpt-4o
+  custom:
+    backendRef:
+      kind: Service
+      name: mock-llm-alpha
+      port: 80
+    formats:
+      - type: Completions
+  parentRefs:
+    - name: ai-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: mock-beta
+  namespace: ai-demo
+spec:
+  provider: Custom
+  match:
+    model: mock-claude
+  custom:
+    backendRef:
+      kind: Service
+      name: mock-llm-beta
+      port: 80
+    formats:
+      - type: Completions
+  parentRefs:
+    - name: ai-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io

@@ -1,0 +1,69 @@
+# AgentgatewayBackend describes an LLM upstream. `groups` is an ordered
+# priority list, and providers within a group are load-balanced with automatic
+# health weighting -- so failover is expressed in the backend itself rather
+# than in a separate traffic policy.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: mock-alpha
+  namespace: ai-demo
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: alpha
+            custom:
+              backendRef:
+                kind: Service
+                name: mock-llm-alpha
+                port: 80
+              formats:
+                - type: Completions
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: mock-beta
+  namespace: ai-demo
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: beta
+            custom:
+              backendRef:
+                kind: Service
+                name: mock-llm-beta
+                port: 80
+              formats:
+                - type: Completions
+---
+# Priority failover: group 0 (alpha) is preferred; group 1 (beta) is only used
+# when the first group is unhealthy. Envoy AI Gateway expresses the same idea
+# with `priority` on AIGatewayRoute backendRefs.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: mock-failover
+  namespace: ai-demo
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: primary
+            custom:
+              backendRef:
+                kind: Service
+                name: mock-llm-alpha
+                port: 80
+              formats:
+                - type: Completions
+      - providers:
+          - name: secondary
+            custom:
+              backendRef:
+                kind: Service
+                name: mock-llm-beta
+                port: 80
+              formats:
+                - type: Completions

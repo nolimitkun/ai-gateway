@@ -1,0 +1,16 @@
+# agentgateway creates the "agentgateway" GatewayClass itself at install time,
+# so unlike the Envoy side there is no GatewayClass to declare here.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ai-gateway
+  namespace: ai-demo
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same

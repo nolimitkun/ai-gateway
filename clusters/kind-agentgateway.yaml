@@ -1,0 +1,29 @@
+# Dedicated cluster for agentgateway.
+#
+# Why a separate cluster per gateway: both projects install cluster-scoped
+# Gateway API CRDs at different versions (Envoy Gateway bundles its own;
+# agentgateway pins v1.6.0). Sharing one cluster makes whichever chart is
+# installed second silently overwrite the other's CRDs. Separate clusters keep
+# each stack on its own supported matrix, so the comparison measures the
+# gateways rather than a CRD collision.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: ai-gw-agent
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # gateway data plane -> http://localhost:8080
+      - containerPort: 30080
+        hostPort: 8081
+        protocol: TCP
+      # control-plane metrics/admin -> http://localhost:8090
+      - containerPort: 30090
+        hostPort: 8091
+        protocol: TCP

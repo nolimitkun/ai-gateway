@@ -1,0 +1,49 @@
+# AIGatewayRoute is the AI-aware routing surface. The `x-ai-eg-model` header is
+# synthesised by the ext_proc filter from the JSON body's `model` field before
+# the routing decision -- that body-aware match is the thing a plain HTTPRoute
+# cannot express.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: mock-route
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - name: ai-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: mock-gpt-4o
+      backendRefs:
+        - name: mock-alpha
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: mock-claude
+      backendRefs:
+        - name: mock-beta
+    # Weighted split across both upstreams -- the comparison's A/B case.
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: mock-split
+      backendRefs:
+        - name: mock-alpha
+          weight: 80
+        - name: mock-beta
+          weight: 20
+  # Token usage is captured into Envoy dynamic metadata under
+  # "io.envoy.ai_gateway", which is what BackendTrafficPolicy rate limits read.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_total_token
+      type: TotalToken

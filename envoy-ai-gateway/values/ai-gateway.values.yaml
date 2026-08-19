@@ -1,0 +1,22 @@
+# Overlay for ai-gateway-helm v1.0.0 on a single-node kind cluster.
+# Defaults live in ai-gateway-helm-v1.0.0.default.yaml -- only deltas here.
+
+controller:
+  logLevel: info
+  # Single-node kind: leader election just adds a lease + startup delay.
+  leaderElection:
+    enabled: false
+  replicaCount: 1
+  resources:
+    requests: {cpu: 50m, memory: 96Mi}
+    limits: {memory: 512Mi}
+
+extProc:
+  # The ext_proc sidecar is where token counting / provider translation happens.
+  # debug makes the request-transformation path visible in `kubectl logs`,
+  # which is the whole point of the comparison.
+  logLevel: debug
+  enableRedaction: true
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
