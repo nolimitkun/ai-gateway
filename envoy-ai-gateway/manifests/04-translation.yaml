@@ -1,0 +1,30 @@
+# Cross-provider translation: the client speaks OpenAI, the upstream is declared
+# as Anthropic. Envoy AI Gateway's ext_proc rewrites the request into Anthropic's
+# /v1/messages wire format. The mock records the path it actually received, so
+# hitting /v1/messages is proof the translation happened.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: mock-anthropic
+  namespace: ai-demo
+spec:
+  endpoints:
+    - fqdn:
+        hostname: mock-llm-alpha.ai-demo.svc.cluster.local
+        port: 80
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: mock-anthropic
+  namespace: ai-demo
+spec:
+  schema:
+    name: Anthropic
+    # `version` is ignored for Anthropic; `prefix` sets the upstream path, so
+    # the messages endpoint becomes "${prefix}/messages".
+    prefix: /v1
+  backendRef:
+    group: gateway.envoyproxy.io
+    kind: Backend
+    name: mock-anthropic

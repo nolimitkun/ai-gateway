@@ -1,0 +1,18 @@
+# agentgateway's equivalent credential injection, on the same AgentgatewayPolicy
+# type that also carries retry/ratelimit/health.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: upstream-key
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: mock-alpha
+  backend:
+    auth:
+      # `secretRef` is a sibling of `key`; `key` is an inline literal string
+      # (least secure). Default key inside the Secret is `Authorization`.
+      secretRef:
+        name: upstream-key

@@ -1,0 +1,67 @@
+# Cross-provider translation on the agentgateway side. Managed provider types
+# (anthropic, gemini, bedrock, azureopenai) carry their own wire format; `host`
+# and `port` override the provider's real endpoint so we can point them at the
+# mock and observe the rewritten path.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: probe-anthropic
+  namespace: ai-demo
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: anth
+            anthropic: {}
+            host: mock-llm-alpha.ai-demo.svc.cluster.local
+            port: 80
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: probe-gemini
+  namespace: ai-demo
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: gem
+            gemini: {}
+            host: mock-llm-alpha.ai-demo.svc.cluster.local
+            port: 80
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: probe-bedrock
+  namespace: ai-demo
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: bed
+            bedrock:
+              region: us-east-1
+            host: mock-llm-alpha.ai-demo.svc.cluster.local
+            port: 80
+---
+# Explicitly declaring the Anthropic Messages format on a custom provider. This
+# is the supported way to point at a self-hosted Anthropic-compatible endpoint,
+# as opposed to overriding `host` on the managed `anthropic` provider.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: probe-messages
+  namespace: ai-demo
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: msgs
+            custom:
+              backendRef:
+                kind: Service
+                name: mock-llm-alpha
+                port: 80
+              formats:
+                - type: Messages

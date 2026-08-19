@@ -1,0 +1,17 @@
+# Credential injection: the client sends no key, the gateway attaches the
+# upstream's. The mock records the Authorization header it received, so seeing
+# the secret value there is proof the gateway injected it.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: upstream-key
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: mock-alpha
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: upstream-key

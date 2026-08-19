@@ -43,6 +43,38 @@ spec:
           weight: 20
     - matches:
         - path: {type: PathPrefix, value: /v1}
+          headers:
+            - {name: x-route-to, value: anthropic}
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: probe-anthropic
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+          headers:
+            - {name: x-route-to, value: gemini}
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: probe-gemini
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+          headers:
+            - {name: x-route-to, value: bedrock}
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: probe-bedrock
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+          headers:
+            - {name: x-route-to, value: messages}
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: probe-messages
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
       backendRefs:
         - group: agentgateway.dev
           kind: AgentgatewayBackend

@@ -3,7 +3,7 @@ SHELL := /bin/bash
 ENVOY_CLUSTER := ai-gw-envoy
 AGENT_CLUSTER := ai-gw-agent
 
-.PHONY: help up down clusters install mocks expose compare status charts
+.PHONY: help up down clusters install mocks expose compare features status charts
 
 help: ## show targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-10s %s\n",$$1,$$2}'
@@ -35,6 +35,9 @@ expose: ## apply routing manifests and pin gateways to nodePort 30080
 
 compare: ## run the functional suite against both gateways
 	bash compare/run-comparison.sh
+
+features: ## run the deeper feature probes (translation, auth, formats)
+	bash compare/feature-matrix.sh
 
 status: ## show pods in both clusters
 	@echo "=== $(ENVOY_CLUSTER) ==="; kubectl --context kind-$(ENVOY_CLUSTER) get pods -A --no-headers | grep -vE 'kube-system|local-path'

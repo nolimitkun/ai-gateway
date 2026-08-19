@@ -17,10 +17,14 @@ no API keys, no paid provider.
 make up
 ```
 
-Then run the suite:
+Then run the suites:
 
 ```bash
 make compare
+```
+
+```bash
+make features
 ```
 
 ## Why two clusters
@@ -116,6 +120,117 @@ agentgateway attaches policy to the model/backend directly — its
 `AgentgatewayPolicy` covers `auth`, `authorization`, `promptGuard`, `health`,
 `transformations`, and `tunnel` in one type.
 
+## Feature comparison
+
+Everything below was executed against the running clusters. The mock upstream
+records the path, headers and body it actually received, so translation and
+credential injection are demonstrated rather than asserted.
+
+### Cross-provider translation
+
+Client speaks OpenAI; the upstream is declared as something else. The gateway
+must rewrite the request *and* translate the native response back.
+
+**Envoy AI Gateway** — set `AIServiceBackend.spec.schema.name`. Proven by the
+path the upstream received:
+
+| schema | upstream path received | round trip |
+|---|---|---|
+| OpenAI | `/v1/chat/completions` | yes |
+| AzureOpenAI | `/openai/deployments/<model>/chat/completions?api-version=…` | yes |
+| AWSBedrock | `/model/<model>/converse` | yes |
+| GCPVertexAI | `publishers/google/models/<model>:generateContent` | yes |
+| GCPAnthropic | `publishers/anthropic/models/<model>:rawPredict` | yes |
+| AWSAnthropic | `/model/<model>/invoke` | yes |
+| **Anthropic (direct)** | — | **no** — `unsupported API schema` |
+| **Cohere** | — | **no** — `unsupported API schema` |
+
+That direct `Anthropic` is unsupported as an *upstream* target is worth knowing:
+Anthropic-on-cloud (Bedrock/Vertex) works, api.anthropic.com does not.
+
+**agentgateway** — declare the format on the provider. A custom provider with
+`formats: [{type: Messages}]` does the full round trip: the mock answers from
+`/v1/messages` with an Anthropic body (`msg_…`, `input_tokens`) and the client
+still receives OpenAI `choices[].message`.
+
+Overriding `host` on a *managed* provider (`anthropic`, `bedrock`) does **not**
+work as a way to point at an arbitrary endpoint: agentgateway keeps the OpenAI
+request path and then fails parsing the response
+(``missing field `input_tokens` ``). Use a `custom` provider with explicit
+`formats` for self-hosted endpoints.
+
+### Failover
+
+Neither gateway fails over on a bare upstream 503 — priority/groups are not
+per-request retry. Both need an explicit policy, and the outcome differs:
+
+| | config | result with primary returning 503 |
+|---|---|---|
+| Envoy AI Gateway | `BackendTrafficPolicy.retry.numAttemptsPerPriority: 1` + `backendRefs[].priority` | **works** — 8/8 requests served by the secondary |
+| agentgateway | `AgentgatewayPolicy.traffic.retry` + ordered `ai.groups` | **not reproduced** — logs show `retry.attempt=3` all against the *same* endpoint; the second group was never tried |
+
+For agentgateway I also tried `backend.health.eviction` with
+`consecutiveFailures: 2` and an explicit `unhealthyCondition: "response.code >= 500"`
+(its docs note the default only lowers a health score and never evicts), and
+with a dedicated route and backend. Traffic still stayed on the failing
+provider. Treating this as "I could not reproduce cross-group failover in
+v1.4.1" rather than a definitive gap — there may be a knob I did not find.
+
+### Credential injection
+
+Client sends no credentials; the gateway attaches the upstream's. Verified by
+reading the `Authorization` header the mock recorded:
+
+| | policy | header upstream received |
+|---|---|---|
+| Envoy AI Gateway | `BackendSecurityPolicy` (`type: APIKey`) | `Bearer demo-key-eaig-123` |
+| agentgateway | `AgentgatewayPolicy.backend.auth.secretRef` | `Bearer demo-key-agw-456` |
+
+Envoy adds the `Bearer ` prefix to the raw secret value; agentgateway sends the
+Secret's `Authorization` key verbatim, so the prefix must be inside the Secret.
+
+### Endpoint coverage beyond chat
+
+| | Envoy AI Gateway | agentgateway |
+|---|---|---|
+| `/v1/embeddings` | works | **fails** (503) |
+
+On the Envoy side, `schema: OpenAI` covers the whole OpenAI surface. agentgateway
+requires formats to be enumerated per provider — and even with a dedicated
+backend declaring only `formats: [{type: Embeddings}]` behind an exact-path
+route, the request was still parsed as a chat completion
+(``missing field `messages` ``). The proxy log confirms the dedicated route
+handled it (`route=ai-demo/llm-embeddings`), so this is not a routing mistake.
+
+### Policy surface
+
+The same capabilities are packaged very differently.
+
+**Envoy AI Gateway** spreads them across Envoy Gateway's existing types:
+`BackendTrafficPolicy` (retry, rate limit, circuit breaking), `SecurityPolicy`
+(JWT, ext_auth, CORS), `BackendSecurityPolicy` (upstream credentials),
+`EnvoyExtensionPolicy`, plus AI-specific `QuotaPolicy` and `MCPRoute`.
+
+**agentgateway** puts nearly everything in one `AgentgatewayPolicy`:
+
+- `spec.traffic` — `rateLimit`, `retry`, `timeouts`, `jwtAuthentication`,
+  `apiKeyAuthentication`, `basicAuthentication`, `authorization`, `cors`, `csrf`,
+  `extAuth`, `extProc`, `transformation`, `headerModifiers`, `hostRewrite`
+- `spec.backend` — `ai`, `auth`, `health`, `mcp`, `tls`, `tunnel`,
+  `transformation`
+
+If you already run Envoy Gateway, the first is familiar and composable. If you
+are starting fresh, the second is far less to learn.
+
+### Agent-native surfaces (not exercised here)
+
+Both ship MCP support and neither was tested — calling this out rather than
+implying coverage. Envoy AI Gateway has a dedicated `MCPRoute` CRD;
+agentgateway has `AgentgatewayBackend.spec.mcp` alongside `spec.a2a`
+(Agent2Agent) and `spec.aws` (Bedrock AgentCore). agentgateway also exposes
+`policies.promptGuard` for prompt/content filtering, which has no direct
+single-resource equivalent on the Envoy side.
+
 ## Known gap found during this exercise
 
 agentgateway's `AgentgatewayModel` API (`agentgatewayModels.enabled=true`) is
@@ -139,14 +254,17 @@ clusters/            kind configs (one per gateway)
 envoy-ai-gateway/
   charts/            pulled .tgz: gateway-helm, ai-gateway-crds-helm, ai-gateway-helm
   values/            *.default.yaml = chart defaults; ai-gateway.values.yaml = our overlay
-  manifests/         GatewayClass/Gateway, Backend+AIServiceBackend, AIGatewayRoute
+  manifests/         Gateway, Backend+AIServiceBackend, AIGatewayRoute,
+                     translation probes, retry/failover, BackendSecurityPolicy
 agentgateway/
   charts/            pulled .tgz: agentgateway-crds, agentgateway
   values/            *.default.yaml = chart defaults; agentgateway.values.yaml = our overlay
-  manifests/         Gateway, AgentgatewayBackend, HTTPRoute
-mock-llm/            OpenAI-compatible mock (server.py is the source of truth)
+  manifests/         Gateway, AgentgatewayBackend, HTTPRoute,
+                     translation probes, retry+health, AgentgatewayPolicy auth
+mock-llm/            OpenAI-compatible mock, also serving Anthropic/Bedrock/Vertex
+                     native paths, request introspection and a failure toggle
 scripts/             install + expose helpers
-compare/             run-comparison.sh and results/
+compare/             run-comparison.sh, feature-matrix.sh and results/
 ```
 
 Charts are vendored as `.tgz` and installed from disk, so a re-run pins the exact
