@@ -1,0 +1,22 @@
+# Optional overlay: restrict the math server to just `add`.
+# Apply with:
+#   kubectl --context kind-ai-gw-envoy patch mcproute mcp -n ai-demo --type=merge \
+#     --patch-file envoy-ai-gateway/manifests/08-mcp-toolfilter.yaml.optional
+#
+# toolSelector is MCPRoute-native and static (include/exclude, plus regex
+# variants). agentgateway achieves the same with a CEL authorization rule.
+spec:
+  backendRefs:
+    - name: mcp-clock
+      kind: Service
+      group: ""
+      port: 80
+      path: /mcp
+    - name: mcp-math
+      kind: Service
+      group: ""
+      port: 80
+      path: /mcp
+      toolSelector:
+        include:
+          - add

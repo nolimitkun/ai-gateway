@@ -27,6 +27,10 @@ make compare
 make features
 ```
 
+```bash
+make mcp
+```
+
 ## Why two clusters
 
 Both projects install cluster-scoped Gateway API CRDs at different versions —
@@ -222,14 +226,69 @@ The same capabilities are packaged very differently.
 If you already run Envoy Gateway, the first is familiar and composable. If you
 are starting fresh, the second is far less to learn.
 
-### Agent-native surfaces (not exercised here)
+### MCP
 
-Both ship MCP support and neither was tested — calling this out rather than
-implying coverage. Envoy AI Gateway has a dedicated `MCPRoute` CRD;
-agentgateway has `AgentgatewayBackend.spec.mcp` alongside `spec.a2a`
-(Agent2Agent) and `spec.aws` (Bedrock AgentCore). agentgateway also exposes
-`policies.promptGuard` for prompt/content filtering, which has no direct
-single-resource equivalent on the Envoy side.
+Tested for real: two mock MCP servers (`clock` and `math`) speaking the
+Streamable HTTP transport, multiplexed behind one gateway endpoint. Both
+deliberately expose a `get_time` tool so name collisions are exercised.
+
+**Both work.** A full `initialize` → `notifications/initialized` → `tools/list`
+→ `tools/call` handshake succeeds through each, tools from both upstreams are
+aggregated, and calls route to the correct server.
+
+| | Envoy AI Gateway | agentgateway |
+|---|---|---|
+| resource | `MCPRoute` | `AgentgatewayBackend.spec.mcp` + `HTTPRoute` |
+| advertised server name | `envoy-ai-gateway` | `agentgateway` |
+| protocol version | `2025-06-18` | `2025-06-18` |
+| capabilities advertised | `tools` | `prompts`, `resources`, `tools` |
+| session id issued | yes | yes |
+| tools multiplexed | 5 from 2 servers | 5 from 2 servers |
+| tool naming | `mcp-math__add` (Service name, `__`) | `math_add` (target name, `_`) |
+| response encoding | SSE | SSE |
+
+Both prefix every tool name rather than only colliding ones — Envoy with the
+Kubernetes Service name, agentgateway with the `targets[].name` you choose. The
+agentgateway form is shorter and decoupled from Service naming.
+
+**Tool filtering.** Both can restrict which tools are exposed, by different
+means. Envoy uses a static `toolSelector` on the backendRef
+(`include`/`exclude` plus regex variants); agentgateway evaluates a CEL rule per
+item with `mcp.tool.name` and `mcp.tool.target`:
+
+```yaml
+# Envoy AI Gateway
+toolSelector:
+  include: [add]
+```
+
+```yaml
+# agentgateway
+authorization:
+  action: Allow
+  policy:
+    matchExpressions:
+      - 'mcp.tool.name == "add" || mcp.tool.target == "clock"'
+```
+
+Both produce the same three surviving tools, and — importantly — both actually
+*enforce* it: a direct `tools/call` to a filtered-out tool is rejected, not just
+hidden from `tools/list`.
+
+They differ in how they reject. agentgateway returns a well-formed JSON-RPC
+error (`-32602 Unknown tool: math_multiply`). Envoy AI Gateway returns a bare
+HTTP 400 with the plain-text body `invalid tool name: multiply` — not a JSON-RPC
+envelope, which a strict MCP client may not parse.
+
+Filtering is kept out of the default manifests so the baseline shows full
+multiplexing; apply `08-mcp-toolfilter.yaml.optional` on either side to see it.
+
+**Not tested:** MCP authentication. Envoy exposes per-backend
+`securityPolicy.apiKey`; agentgateway has a richer OAuth/JWT block
+(`backend.mcp.authentication` with `issuer`, `jwks`, and named providers like
+Auth0/Entra) plus `backend.mcp.guardrails`. agentgateway also carries `spec.a2a`
+(Agent2Agent) and `spec.aws` (Bedrock AgentCore) backends with no Envoy
+equivalent.
 
 ## Known gap found during this exercise
 
@@ -255,16 +314,19 @@ envoy-ai-gateway/
   charts/            pulled .tgz: gateway-helm, ai-gateway-crds-helm, ai-gateway-helm
   values/            *.default.yaml = chart defaults; ai-gateway.values.yaml = our overlay
   manifests/         Gateway, Backend+AIServiceBackend, AIGatewayRoute,
-                     translation probes, retry/failover, BackendSecurityPolicy
+                     translation probes, retry/failover, BackendSecurityPolicy,
+                     MCPRoute
 agentgateway/
   charts/            pulled .tgz: agentgateway-crds, agentgateway
   values/            *.default.yaml = chart defaults; agentgateway.values.yaml = our overlay
   manifests/         Gateway, AgentgatewayBackend, HTTPRoute,
-                     translation probes, retry+health, AgentgatewayPolicy auth
+                     translation probes, retry+health, AgentgatewayPolicy auth,
+                     MCP backend
 mock-llm/            OpenAI-compatible mock, also serving Anthropic/Bedrock/Vertex
                      native paths, request introspection and a failure toggle
 scripts/             install + expose helpers
-compare/             run-comparison.sh, feature-matrix.sh and results/
+mcp-server/          mock MCP servers (clock + math) over Streamable HTTP
+compare/             run-comparison.sh, feature-matrix.sh, mcp-test.py, results/
 ```
 
 Charts are vendored as `.tgz` and installed from disk, so a re-run pins the exact
