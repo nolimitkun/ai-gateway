@@ -167,6 +167,22 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(by_id["whisper-large-v3"], "l40s")
         self.assertEqual(by_id["mock-kserve"], "cpu")
 
+    def test_shared_runtime_reports_the_serving_class_separately(self):
+        status, payload = self.post_json(
+            "/v1/chat/completions",
+            {"model": "kimi-k3", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["mock_accelerator"], "all")
+        self.assertEqual(payload["model_accelerator"], "b300")
+
+        status, payload = self.post_json(
+            "/v1/embeddings", {"model": "bge-m3", "input": "gateway"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["mock_accelerator"], "all")
+        self.assertEqual(payload["model_accelerator"], "l40s")
+
     def test_model_catalog_filters_by_accelerator(self):
         status, payload = self.get("/v1/models?accelerator=h100")
         self.assertEqual(status, 200)
@@ -461,6 +477,8 @@ class AcceleratorPoolTest(unittest.TestCase):
 
         status, payload = self.request("/v1/models/bge-m3")
         self.assertEqual(status, 404)
+        self.assertEqual(payload["error"]["code"], "model_not_served_here")
+        self.assertIn("l40s", payload["error"]["message"])
 
     def test_pool_without_a_task_says_so(self):
         status, payload = self.request("/v1/embeddings", {"input": "chunk"})
