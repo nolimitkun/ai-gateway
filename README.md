@@ -45,7 +45,18 @@ between the three gateways.
 | Provider credentials | Not provided by the compared policy | `BackendSecurityPolicy` | Backend authentication on `AgentgatewayBackend` |
 | MCP routing | Not provided by the compared policy | `MCPRoute` | Native MCP routing with OAuth |
 | Telemetry controls | `TelemetryPolicy` metric labels | `EnvoyProxy` telemetry | `frontend.metrics`, tracing, and access logs |
+
+### Live comparison
+
+`make compare` replaces everything between the markers below with the table
+it measured. After each successful scheduled or manually dispatched run, the
+workflow commits the updated README. These are regression smoke tests against
+a zero-delay Python runtime, not production performance benchmarks.
+
 <!-- comparison-results:start -->
+
+| Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
+|---|---|---|---|
 | Last live comparison (UTC) | 2026-08-24 15:52 (30 requests) | 2026-08-24 15:52 (30 requests) | 2026-08-24 15:52 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
@@ -70,12 +81,13 @@ between the three gateways.
 | Quota limit | Not measured | Not measured | Not measured |
 | Token limit | Not measured | Not measured | Not measured |
 | CORS preflight answered | Not measured | Not measured | Not measured |
-<!-- comparison-results:end -->
+| Semantic router ext_proc attachment | Not measured | Not measured | Not measured |
+| Auto model selection: reasoning / code / chat | Not measured | Not measured | Not measured |
+| Model and prompt the runtime received | Not measured | Not measured | Not measured |
+| Decision headers returned to the client | Not measured | Not measured | Not measured |
+| Auto-routed chat p50 | Not measured | Not measured | Not measured |
 
-`make compare` replaces only the rows between the comparison markers above.
-After each successful scheduled or manually dispatched run, the workflow
-commits the updated README. These are regression smoke tests against a
-zero-delay Python runtime, not production performance benchmarks.
+<!-- comparison-results:end -->
 
 Kuadrant is a policy control plane, not a proxy. The OpenShift profile combines
 Kuadrant with Istio and Envoy to reproduce the OpenShift shared-Gateway shape;

@@ -690,7 +690,17 @@ comparison_rows="$(cat <<EOF
 EOF
 )"
 
-COMPARISON_ROWS="$comparison_rows" python3 - "$README" <<'PY'
+# An HTML comment is a block-level element, so a marker between a table's
+# header and its rows ends the table there and leaves every row after it
+# rendering as literal pipes. The generated block therefore carries its own
+# header and delimiter and stands as a complete table between the markers.
+COMPARISON_HEADER='| Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
+|---|---|---|---|'
+
+COMPARISON_TABLE="$COMPARISON_HEADER
+$comparison_rows"
+
+COMPARISON_TABLE="$COMPARISON_TABLE" python3 - "$README" <<'PY'
 import os
 from pathlib import Path
 import sys
@@ -702,15 +712,15 @@ content = path.read_text(encoding="utf-8")
 if content.count(start) != 1 or content.count(end) != 1:
     raise SystemExit(f"expected exactly one comparison marker pair in {path}")
 
-replacement = f"{start}\n{os.environ['COMPARISON_ROWS'].rstrip()}\n{end}"
+# Blank lines keep the table a block of its own, whatever surrounds the markers.
+table = os.environ["COMPARISON_TABLE"].strip()
+replacement = f"{start}\n\n{table}\n\n{end}"
 prefix, remainder = content.split(start, 1)
 _, suffix = remainder.split(end, 1)
 updated = prefix + replacement + suffix
 path.write_text(updated, encoding="utf-8")
 PY
 
-echo "updated live comparison rows in $README" >&2
+echo "updated live comparison table in $README" >&2
 printf '## Live gateway comparison — %s UTC\n\n' "$timestamp"
-printf '| Check | OpenShift profile (Kuadrant + Istio/Envoy) | Envoy AI Gateway | agentgateway |\n'
-printf '|---|---|---|---|\n'
-printf '%s\n' "$comparison_rows"
+printf '%s\n' "$COMPARISON_TABLE"
