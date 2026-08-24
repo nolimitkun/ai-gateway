@@ -544,13 +544,22 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def handle_model_read(self, model_id):
-        entry = SERVED.get(model_id)
+        entry = MODELS.get(model_id)
         if entry is None:
             self.send_error_payload(
                 404,
                 f"model '{model_id}' does not exist in this mock catalog",
                 "invalid_request_error",
                 "model_not_found",
+            )
+            return
+        if model_id not in SERVED:
+            self.send_error_payload(
+                404,
+                f"model '{model_id}' runs on {entry['accelerator']} and is not served "
+                f"by this {ACCELERATOR} pool",
+                "invalid_request_error",
+                "model_not_served_here",
             )
             return
         self.send_json(200, model_card(entry))
@@ -670,7 +679,8 @@ class Handler(BaseHTTPRequestHandler):
                 "usage": usage,
                 "mock_pod": UPSTREAM,
                 "mock_tier": entry["tier"],
-                "mock_accelerator": entry["accelerator"],
+                "mock_accelerator": ACCELERATOR or "all",
+                "model_accelerator": entry["accelerator"],
             },
         )
 
@@ -724,7 +734,8 @@ class Handler(BaseHTTPRequestHandler):
                 "model": entry["id"],
                 "usage": {"prompt_tokens": tokens, "total_tokens": tokens},
                 "mock_pod": UPSTREAM,
-                "mock_accelerator": entry["accelerator"],
+                "mock_accelerator": ACCELERATOR or "all",
+                "model_accelerator": entry["accelerator"],
                 "mock_dimensions": dimensions,
             },
         )
@@ -782,7 +793,8 @@ class Handler(BaseHTTPRequestHandler):
                 "results": ranked,
                 "usage": {"search_units": 1},
                 "mock_pod": UPSTREAM,
-                "mock_accelerator": entry["accelerator"],
+                "mock_accelerator": ACCELERATOR or "all",
+                "model_accelerator": entry["accelerator"],
             },
         )
 
@@ -862,7 +874,8 @@ class Handler(BaseHTTPRequestHandler):
             "language": fields.get("language", "en"),
             "duration": duration,
             "mock_pod": UPSTREAM,
-            "mock_accelerator": entry["accelerator"],
+            "mock_accelerator": ACCELERATOR or "all",
+            "model_accelerator": entry["accelerator"],
         }
         if response_format == "verbose_json" or diarize:
             if not diarize:

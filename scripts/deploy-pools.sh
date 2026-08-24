@@ -105,7 +105,7 @@ check_pool() {
   else
     body="{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
   fi
-  curl -sS -m 25 "$base$path" \
+  curl -sS --fail-with-body -m 25 "$base$path" \
     -H 'content-type: application/json' \
     -H "x-model-class: $pool" \
     -d "$body" |
@@ -113,10 +113,19 @@ check_pool() {
 import json, sys
 try:
     body = json.load(sys.stdin)
-    print('$pool -> ' + body.get('mock_accelerator', 'unknown') +
-          ' on ' + body.get('mock_pod', body.get('id', 'unknown')))
-except Exception:
-    print('$pool -> no response')"
+except Exception as error:
+    print('$pool -> invalid response: ' + str(error), file=sys.stderr)
+    raise SystemExit(1)
+accelerator = body.get('mock_accelerator')
+pod = body.get('mock_pod', '')
+if accelerator != '$pool' or not pod.startswith('kserve-$pool-'):
+    print(
+        '$pool -> expected accelerator $pool on a kserve-$pool pod, got ' +
+        str(accelerator) + ' on ' + str(pod or 'unknown'),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+print('$pool -> ' + accelerator + ' on ' + pod)"
 }
 
 for base in http://localhost:8082 http://localhost:8080 http://localhost:8081; do

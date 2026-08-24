@@ -218,6 +218,12 @@ The response reports the class that served it:
 {"model": "kimi-k3", "mock_tier": "big", "mock_accelerator": "b300", "...": "..."}
 ```
 
+The response separates the serving runtime from the model's intended placement:
+`mock_accelerator` identifies the runtime that actually served the request
+(the shared fixture reports `all`), while `model_accelerator` identifies the
+class the requested model belongs to. A request that falls through to the
+shared route therefore cannot look like a correctly routed pool request.
+
 `GET /v1/models` on a pool lists only that pool's models, and `/health` reports
 its accelerator class, so a pool's inventory can be read from the pool itself.
 
