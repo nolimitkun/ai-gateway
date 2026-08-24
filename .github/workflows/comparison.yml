@@ -1,0 +1,156 @@
+name: gateway comparison
+
+# The full run: three kind clusters, KServe in each, the gateway policy layer,
+# and the comparison probes -- everything `make up && make policies &&
+# make compare` does on a laptop. It takes the better part of an hour, so it
+# is manual and weekly rather than per-push.
+#
+# Standard runners are free for public repositories and give this job 4 CPUs,
+# 16 GB of RAM and a disk that needs clearing first. If a run ever exhausts
+# those, the next step is one cluster per matrix job, which needs the
+# comparison harness to emit per-stack fragments a final job merges.
+on:
+  workflow_dispatch:
+    inputs:
+      features:
+        description: also deploy Keycloak and the gateway feature policies
+        type: boolean
+        default: true
+      requests:
+        description: chat requests sampled per gateway
+        type: string
+        default: '30'
+  schedule:
+    # Mondays, 06:00 UTC.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+# One run at a time: three clusters and fixed host ports do not share a runner
+# with a second copy of themselves, and a cancelled half-built run tells us
+# nothing.
+concurrency:
+  group: gateway-comparison
+  cancel-in-progress: false
+
+env:
+  # v0.32.0 defaults to the same kindest/node digest the cluster configs pin.
+  KIND_VERSION: v0.32.0
+
+jobs:
+  comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: reclaim runner disk
+        # Three clusters pull Istio, Envoy, KServe, Keycloak and Redis into
+        # three separate containerd stores. The preinstalled toolchains this
+        # job never touches are worth more to it as free space.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+          df -h /
+
+      - name: raise inotify limits
+        # kubelet, containerd and the controllers in three clusters together
+        # exhaust the runner's default watch and instance budget.
+        run: |
+          sudo sysctl -w fs.inotify.max_user_watches=1048576
+          sudo sysctl -w fs.inotify.max_user_instances=8192
+
+      - name: install cluster tooling
+        run: |
+          cd /tmp
+          base="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}"
+          curl -fsSLO "$base/kind-linux-amd64"
+          if curl -fsSLO "$base/kind-linux-amd64.sha256sum"; then
+            sha256sum -c kind-linux-amd64.sha256sum
+          else
+            echo "::warning::no published checksum asset for ${KIND_VERSION}"
+          fi
+          sudo install -m 0755 kind-linux-amd64 /usr/local/bin/kind
+          command -v helm >/dev/null || \
+            curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          kind version
+          kubectl version --client
+          helm version --short
+
+      - name: build the three gateway environments
+        run: make up
+        timeout-minutes: 75
+
+      - name: runner headroom after the clusters are up
+        if: always()
+        run: |
+          free -h
+          df -h /
+          docker ps --format 'table {{.Names}}\t{{.Status}}'
+
+      - name: deploy the gateway feature policies
+        if: github.event_name == 'schedule' || inputs.features
+        run: make policies
+        timeout-minutes: 30
+
+      - name: run the comparison
+        env:
+          N: ${{ inputs.requests || '30' }}
+        run: |
+          # Name the file this run writes by diffing the directory, so the
+          # result committed to the repository can never be mistaken for it.
+          before="$(mktemp)"; after="$(mktemp)"
+          find compare/results -name '*.md' | sort > "$before"
+          make compare
+          find compare/results -name '*.md' | sort > "$after"
+          result="$(comm -13 "$before" "$after" | tail -1)"
+          test -n "$result" || { echo "the comparison wrote no result file" >&2; exit 1; }
+          mkdir -p artifacts
+          cp "$result" artifacts/comparison.md
+        timeout-minutes: 20
+
+      - name: publish the comparison to the job summary
+        if: always()
+        run: |
+          if [[ -f artifacts/comparison.md ]]; then
+            cat artifacts/comparison.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The comparison produced no result; see the diagnostics artifact." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: collect cluster diagnostics
+        if: failure()
+        run: |
+          mkdir -p diagnostics
+          dump() { echo "===== $* ====="; "$@" 2>&1 || true; echo; }
+          for cluster in ai-gw-kuadrant ai-gw-envoy ai-gw-agent; do
+            ctx="kind-$cluster"
+            kubectl config get-contexts "$ctx" >/dev/null 2>&1 || continue
+            {
+              dump kubectl --context "$ctx" get pods -A -o wide
+              dump kubectl --context "$ctx" get pods -A \
+                --field-selector=status.phase!=Running -o yaml
+              dump kubectl --context "$ctx" get gateway,httproute,inferencepool,llminferenceservice -A
+              dump kubectl --context "$ctx" get authpolicy,ratelimitpolicy,tokenratelimitpolicy \
+                -n ai-demo -o yaml
+              dump kubectl --context "$ctx" get securitypolicy,backendtrafficpolicy,aigatewayroute \
+                -n ai-demo -o yaml
+              dump kubectl --context "$ctx" get agentgatewaypolicy -n ai-demo -o yaml
+              dump kubectl --context "$ctx" get events -A --sort-by=.lastTimestamp
+            } > "diagnostics/$cluster.txt"
+          done
+          { free -h; df -h /; } > diagnostics/runner.txt 2>&1
+
+      - name: upload the comparison and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-comparison-${{ github.run_id }}
+          path: |
+            artifacts/comparison.md
+            diagnostics/
+          if-no-files-found: warn
+          retention-days: 30

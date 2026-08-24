@@ -660,7 +660,36 @@ That run predates the feature layer, so it carries no authentication,
 authorization, rate limit, quota, or token rows. The policy manifests and
 `make policies` have been checked against the vendored CRD schemas with
 `make validate`, not yet against a running cluster; run `make policies &&
-make compare` to fill those rows in.
+make compare` -- locally or through the workflow below -- to fill those rows
+in.
+
+## Running it in CI
+
+Two GitHub Actions workflows, both on standard runners, which are free for
+public repositories:
+
+| Workflow | What it runs | When | Roughly |
+|---|---|---|---|
+| `.github/workflows/checks.yml` | `make test` and `make validate` | every push and pull request | 1 minute |
+| `.github/workflows/comparison.yml` | `make up`, `make policies`, `make compare` | manual dispatch, and Mondays at 06:00 UTC | 45-70 minutes |
+
+The comparison workflow builds all three kind clusters on one runner. Before it
+starts it clears the preinstalled toolchains it does not use, because three
+separate containerd stores pulling Istio, Envoy, KServe, Keycloak, and Redis
+need the space, and it raises the inotify watch and instance limits, which
+three clusters' worth of kubelets and controllers otherwise exhaust.
+
+Dispatch it from the Actions tab. Two inputs: whether to deploy the feature
+policies (default yes) and how many chat requests to sample per gateway
+(default 30). The finished comparison is written to the run's job summary and
+uploaded as an artifact; a failed run uploads per-cluster pod, policy, and
+event dumps instead.
+
+A standard runner gives the job 4 CPUs and 16 GB of RAM for all three stacks,
+which is the tightest part of this arrangement. If a run exhausts it, the next
+step is one cluster per matrix job -- which needs the comparison harness split
+into per-stack fragments a final job merges, since today it builds its table
+from all three gateways in a single pass.
 
 ## Why three clusters
 
@@ -671,6 +700,7 @@ upgrading another stack's CRDs and makes teardown deterministic.
 ## Repository layout
 
 ```text
+.github/workflows/         offline checks per push, full comparison on demand
 clusters/                  three kind cluster definitions
 kuadrant/                  OpenShift-style Gateway overlay, Istio provider, and Kuadrant policy
 kuadrant/policies/         AuthPolicy, RateLimitPolicy, and TokenRateLimitPolicy
