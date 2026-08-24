@@ -90,6 +90,7 @@ class RuntimeTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(payload["object"], "chat.completion")
+        self.assertIsInstance(payload["created"], int)
         self.assertEqual(payload["choices"][0]["message"]["role"], "assistant")
 
     def test_embeddings_are_deterministic(self):
@@ -115,6 +116,21 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([item["index"] for item in payload["results"]], [1, 2])
 
+    def test_vllm_rerank_aliases_share_the_contract(self):
+        request = {
+            "query": "gateway inference",
+            "documents": ["unrelated", "gateway inference routing"],
+            "top_n": 1,
+        }
+        for path in ("/rerank", "/v1/rerank", "/v2/rerank"):
+            status, payload = self.post_json(path, request)
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["results"][0]["index"], 1)
+            self.assertEqual(
+                payload["results"][0]["document"]["text"],
+                "gateway inference routing",
+            )
+
     def test_transcription_accepts_multipart_audio(self):
         boundary = "mock-boundary"
         body = (
@@ -133,6 +149,24 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("sample.wav", payload["text"])
         self.assertEqual(payload["model"], "mock-whisper")
+
+    def test_shared_vllm_contract_validator(self):
+        validator = os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "validate-vllm-contract.py"
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                validator,
+                "--base-url",
+                f"http://127.0.0.1:{self.server.server_address[1]}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_model_catalog_lists_every_task_and_tier(self):
         status, payload = self.get("/v1/models")
@@ -264,6 +298,7 @@ class RuntimeTest(unittest.TestCase):
                 "model": "glm-5.3",
                 "max_tokens": 2,
                 "stream": True,
+                "stream_options": {"include_usage": True},
                 "messages": [{"role": "user", "content": "hi"}],
             },
         )
@@ -277,6 +312,24 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(len(content["delta"]["content"].split()), 2)
         self.assertEqual(content["finish_reason"], "length")
         self.assertEqual(chunks[-1]["usage"]["completion_tokens"], 2)
+
+    def test_streaming_only_emits_usage_when_requested(self):
+        status, body = self.request_raw(
+            "/v1/chat/completions",
+            {
+                "model": "mock-kserve",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        self.assertEqual(status, 200)
+        chunks = [
+            json.loads(line[len("data: ") :])
+            for line in body.splitlines()
+            if line.startswith("data: ") and not line.endswith("[DONE]")
+        ]
+        self.assertTrue(all("usage" not in chunk for chunk in chunks))
+        self.assertTrue(all(isinstance(chunk["created"], int) for chunk in chunks))
 
     def test_max_tokens_above_the_tier_keeps_the_whole_completion(self):
         status, payload = self.post_json(
@@ -337,6 +390,11 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["model"], "bge-reranker-v2-m3")
         self.assertEqual(payload["results"][0]["index"], 1)
+        self.assertEqual(
+            payload["results"][0]["document"]["text"],
+            "gateway inference routing",
+        )
+        self.assertGreater(payload["usage"]["total_tokens"], 0)
 
     def test_asr_models_transcribe_without_diarization(self):
         status, payload = self.multipart(

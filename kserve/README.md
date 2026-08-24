@@ -12,7 +12,10 @@ and agentgateway clusters.
   `InferencePool`.
 - `pools/kustomization.yaml` applies all four pools; `make pools` deploys them.
 - `overlays/gpu/kustomization.yaml` adds the node selector, toleration, and
-  `nvidia.com/gpu` request each class needs on a GPU cluster.
+  `nvidia.com/gpu` request to the mock pools for placement testing. It does not
+  turn the Python fixture into a production model server.
+- `production/` defines the pinned vLLM runtime and four real, task-specific
+  `LLMInferenceService` resources for chat, embeddings, reranking, and ASR.
 - `../kuadrant/pools-overlay/` is the OpenShift-profile variant of the pools,
   with one cert-manager-issued endpoint picker certificate per pool.
 - `manifests/route.yaml` is the only inference route in the repository.
@@ -62,7 +65,7 @@ the header is present and the shared path is unchanged when it is not. A pool
 replica gets `ACCELERATOR` in its environment and serves only the models of
 that class; anything else returns HTTP 404 `model_not_served_here`.
 
-The single `HTTPRoute` matches `/v1`, which integrates all mock capabilities
+The shared `HTTPRoute` matches `/v1`, which integrates all mock capabilities
 with every gateway without provider-specific paths:
 
 | Endpoint | Compatibility shape |
@@ -70,7 +73,7 @@ with every gateway without provider-specific paths:
 | `/v1/models` | OpenAI model list and retrieve, with task and tier metadata |
 | `/v1/chat/completions` | OpenAI chat and server-sent event streaming |
 | `/v1/embeddings` | OpenAI embeddings response list |
-| `/v1/rerank` | common query/documents reranking schema |
+| `/rerank`, `/v1/rerank`, `/v2/rerank` | vLLM query/documents schema, including returned documents and token usage |
 | `/v1/audio/transcriptions` | OpenAI multipart transcription upload, with segments and diarization |
 
 One process answers for every model a pool serves. The tiered chat, STT, and
@@ -87,13 +90,19 @@ audio uploads on a CPU laptop. Storage initialization is disabled and
 
 That combined runtime is not a model-server recommendation. Production chat,
 embedding, reranking, and transcription models normally have different
-runtimes, scaling profiles, and accelerator requirements. `pools/` and
-`overlays/gpu/` model that split — a B300 pool for the big chat models, an H200
-pool for the medium one, and H100 and L40S pools for the small chat, retrieval,
-and speech models — while keeping the CPU mock as the container on kind. Deploy task-specific
-backends and routes; for LLM workloads, use a real model URI and KServe runtime
-config, enable storage initialization, allocate GPU resources, and select
-scheduler plugins that consume queue and KV-cache telemetry.
+runtimes, scaling profiles, and accelerator requirements. `pools/` models
+accelerator routing while keeping the CPU mock as the container on kind;
+`overlays/gpu/` only validates placement and resource requests. The deployable
+reference is `production/`: each task gets its own vLLM process, real Hugging
+Face URI, storage initializer, GPU resources, health probes, cache and shared
+memory volumes, and KServe scheduler. Its routes use `x-model-service` because
+one accelerator class can host more than one independently scaled model.
+
+The mock intentionally adds `mock_*` observability fields and optional
+`diarization`/`num_speakers` transcription fields. Clients must not depend on
+those in production. Everything else covered by
+`scripts/validate-vllm-contract.py` is asserted against the same response
+shape used by vLLM.
 
 The required installation order is preserved by the scripts: Gateway API
 Inference Extension CRDs are installed before each gateway provider, followed

@@ -42,6 +42,7 @@ MANIFESTS = (
     "keycloak/manifests/*.yaml",
     "kserve/manifests/*.yaml",
     "kserve/pools/*.yaml",
+    "kserve/production/*.yaml",
 )
 
 
