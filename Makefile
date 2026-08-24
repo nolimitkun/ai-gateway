@@ -23,7 +23,7 @@ clusters: ## create one kind cluster per gateway stack
 	kind create cluster --config clusters/kind-envoy-ai-gateway.yaml --wait 180s
 	kind create cluster --config clusters/kind-agentgateway.yaml --wait 180s
 
-install: ## install Kuadrant+Envoy, Envoy AI Gateway, agentgateway, and KServe
+install: ## install OpenShift-like Kuadrant, Envoy AI Gateway, agentgateway, and KServe
 	bash scripts/install-kuadrant.sh
 	bash scripts/install-envoy-ai-gateway.sh
 	bash scripts/install-agentgateway.sh
@@ -38,6 +38,7 @@ gateways: ## create the three Gateway API entry points
 	kubectl --context kind-$(ENVOY_CLUSTER) apply -f envoy-ai-gateway/manifests/gateway.yaml
 	kubectl --context kind-$(AGENT_CLUSTER) apply -f agentgateway/manifests/gateway.yaml
 	@sleep 15
+	bash scripts/expose-gateway.sh $(KUADRANT_CLUSTER) openshift-ingress openshift-ai-inference
 	bash scripts/expose-gateway.sh $(AGENT_CLUSTER) ai-demo ai-gateway
 
 kserve: ## deploy the same KServe LLMInferenceService into all three clusters
@@ -56,7 +57,11 @@ agent-ui: ## expose agentgateway UI at http://localhost:15000/ui
 			--address 127.0.0.1 "pod/$$POD" 15000:15000
 
 status: ## show KServe and gateway readiness in all clusters
+	@echo "=== $(KUADRANT_CLUSTER) ==="
+	@kubectl --context kind-$(KUADRANT_CLUSTER) get gateway -n openshift-ingress
+	@kubectl --context kind-$(KUADRANT_CLUSTER) get httproute,llminferenceservice,inferencepool -n ai-demo
 	@for cluster in $(CLUSTERS); do \
+		if [ "$$cluster" = "$(KUADRANT_CLUSTER)" ]; then continue; fi; \
 		echo "=== $$cluster ==="; \
 		kubectl --context "kind-$$cluster" get gateway,httproute,llminferenceservice,inferencepool -n ai-demo; \
 	done
