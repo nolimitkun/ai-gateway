@@ -1,0 +1,17 @@
+# This high ceiling keeps the latency/success sample neutral while proving that
+# Kuadrant successfully attaches policy to the same KServe-owned data path.
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: kserve-mock
+  namespace: ai-demo
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: kserve-mock
+  limits:
+    comparison:
+      rates:
+        - limit: 10000
+          window: 1m

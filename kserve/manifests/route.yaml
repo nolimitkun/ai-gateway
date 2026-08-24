@@ -1,0 +1,24 @@
+# Identical bring-your-own route referenced by the LLMInferenceService in all
+# clusters. KServe owns the InferencePool and EPP; this repository owns the
+# route so the gateway comparison uses exactly the same matching semantics.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kserve-mock
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-mock-inference-pool
+      timeouts:
+        request: 60s

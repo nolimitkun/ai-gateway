@@ -23,7 +23,3 @@ nodes:
       - containerPort: 30080
         hostPort: 8081
         protocol: TCP
-      # control-plane metrics/admin -> http://localhost:8090
-      - containerPort: 30090
-        hostPort: 8091
-        protocol: TCP

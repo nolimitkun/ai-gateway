@@ -1,124 +1,134 @@
 #!/usr/bin/env bash
-# Runs the same functional suite against both gateways and writes a report.
-#
-#   Envoy AI Gateway -> http://localhost:8080  (kind ai-gw-envoy)
-#   agentgateway     -> http://localhost:8081  (kind ai-gw-agent)
-#
-# Usage: compare/run-comparison.sh [output-file]
-set -uo pipefail
+# Compare three gateway stacks through one identical KServe LLMInferenceService.
+set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:-$ROOT/compare/results/comparison-$(date +%Y%m%d-%H%M%S).md}"
-EAIG=http://localhost:8080
-AGW=http://localhost:8081
-N="${N:-20}"
+N="${N:-30}"
+BODY='{"model":"mock-kserve","messages":[{"role":"user","content":"hello through KServe"}]}'
+STREAM='{"model":"mock-kserve","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hello through KServe"}]}'
 
-# Model routing is expressed differently by design: Envoy AI Gateway matches on
-# the model name lifted out of the request body, agentgateway matches on a
-# normal HTTPRoute header. Each side gets the idiomatic form of the same intent.
-post() { # post <base> <extra-header|-> <json>
-  local base="$1" hdr="$2" body="$3"
-  if [[ "$hdr" == "-" ]]; then
-    curl -s -m 25 "$base/v1/chat/completions" -H 'content-type: application/json' -d "$body"
-  else
-    curl -s -m 25 "$base/v1/chat/completions" -H 'content-type: application/json' -H "$hdr" -d "$body"
-  fi
+condition_status() {
+  local context="$1" object="$2" condition="$3"
+  kubectl --context "$context" -n ai-demo get "$object" -o json 2>/dev/null | python3 -c '
+import json, sys
+want = sys.argv[1]
+try:
+    obj = json.load(sys.stdin)
+    conditions = obj.get("status", {}).get("conditions", [])
+    if obj.get("kind") == "HTTPRoute":
+        conditions = [c for parent in obj.get("status", {}).get("parents", [])
+                      for c in parent.get("conditions", [])]
+    print("yes" if any(c.get("type") == want and c.get("status") == "True"
+                       for c in conditions) else "no")
+except Exception:
+    print("no")' "$condition"
 }
 
-timed() { # timed <base> <hdr> <json> -> milliseconds
-  local base="$1" hdr="$2" body="$3" args=(-s -o /dev/null -m 25 -w '%{time_total}')
-  [[ "$hdr" != "-" ]] && args+=(-H "$hdr")
-  local t
-  t=$(curl "${args[@]}" "$base/v1/chat/completions" -H 'content-type: application/json' -d "$body")
-  python3 -c "print(round(float('$t')*1000))"
-}
-
-p50() { sort -n | awk '{a[NR]=$1} END{if(NR)print a[int((NR+1)/2)]; else print "n/a"}'; }
-
-body_alpha='{"model":"mock-gpt-4o","messages":[{"role":"user","content":"hello"}]}'
-body_beta='{"model":"mock-claude","messages":[{"role":"user","content":"hello"}]}'
-body_split='{"model":"mock-split","messages":[{"role":"user","content":"x"}]}'
-body_stream='{"model":"mock-gpt-4o","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}]}'
-
-echo "collecting ($N requests per latency sample)..." >&2
-
-# --- routing correctness -------------------------------------------------
-eaig_alpha=$(post $EAIG - "$body_alpha" | grep -oE 'from (alpha|beta)' || echo MISS)
-eaig_beta=$( post $EAIG - "$body_beta"  | grep -oE 'from (alpha|beta)' || echo MISS)
-agw_alpha=$( post $AGW  - "$body_alpha" | grep -oE 'from (alpha|beta)' || echo MISS)
-agw_beta=$(  post $AGW  'x-route-to: beta' "$body_beta" | grep -oE 'from (alpha|beta)' || echo MISS)
-
-# --- streaming (final chunk must carry usage) ----------------------------
-eaig_stream=$(curl -s -m 25 $EAIG/v1/chat/completions -H 'content-type: application/json' -d "$body_stream" \
-  | grep -c '"usage"' || true)
-agw_stream=$(curl -s -m 25 $AGW/v1/chat/completions -H 'content-type: application/json' -d "$body_stream" \
-  | grep -c '"usage"' || true)
-
-# --- weighted split 80/20 ------------------------------------------------
-eaig_split=$(for i in $(seq 1 $N); do post $EAIG - "$body_split"; echo; done \
-  | grep -oE 'from (alpha|beta)' | sort | uniq -c | tr '\n' ' ')
-agw_split=$(for i in $(seq 1 $N); do post $AGW 'x-route-to: split' "$body_alpha"; echo; done \
-  | grep -oE 'from (alpha|beta)' | sort | uniq -c | tr '\n' ' ')
-
-# --- latency p50 through each gateway (same zero-latency upstream) -------
-eaig_p50=$(for i in $(seq 1 $N); do timed $EAIG - "$body_alpha"; done | p50)
-agw_p50=$( for i in $(seq 1 $N); do timed $AGW  - "$body_alpha"; done | p50)
-
-# --- resource footprint --------------------------------------------------
-res() { # res <context> <ns...>
-  local ctx="$1"; shift
-  for ns in "$@"; do
-    kubectl --context "$ctx" -n "$ns" top pod --no-headers 2>/dev/null \
-      | awk -v n="$ns" '{print n"/"$1" "$2" "$3}'
+samples() {
+  local base="$1" raw status rest elapsed body pod
+  for _ in $(seq 1 "$N"); do
+    raw=$(curl -sS -m 25 -w '|%{time_total}|%{http_code}' "$base/v1/chat/completions" -H 'content-type: application/json' -d "$BODY")
+    status=${raw##*|}
+    rest=${raw%|*}
+    elapsed=${rest##*|}
+    body=${rest%|*}
+    pod=unknown
+    if [[ "$body" =~ Hello\ from\ ([^[:space:]\(]+) ]]; then
+      pod=${BASH_REMATCH[1]}
+    fi
+    python3 -c "print('$pod', round(float('${elapsed:-0}') * 1000), '$status')"
   done
 }
-eaig_pods=$(kubectl --context kind-ai-gw-envoy get pods -A --no-headers 2>/dev/null \
-  | grep -cE 'envoy-gateway-system|envoy-ai-gateway-system')
-agw_pods=$(kubectl --context kind-ai-gw-agent get pods -A --no-headers 2>/dev/null \
-  | grep -cE 'agentgateway-system|ai-demo.*ai-gateway')
-# Count init containers too: Envoy AI Gateway injects ai-gateway-extproc as a
-# native sidecar (an initContainer with restartPolicy=Always), so it is invisible
-# in .spec.containers yet is a real per-request process hop.
-dp_containers() { # dp_containers <context> <ns> <label>
-  kubectl --context "$1" -n "$2" get pod -l "$3" -o json 2>/dev/null | python3 -c '
-import json,sys
-d=json.load(sys.stdin)
-if not d.get("items"): print("n/a"); raise SystemExit
-p=d["items"][0]["spec"]
-names=[c["name"] for c in p.get("initContainers",[]) if c.get("restartPolicy")=="Always"]
-names+=[c["name"] for c in p.get("containers",[])]
-print(", ".join(names))'
+
+distribution() {
+  awk '$3==200 {ok++} $1=="unknown" {unknown++} $1!="unknown" {seen[$1]=1}
+       END {for (pod in seen) pods++; printf "%d pods; %d unknown; %d/%d HTTP 200",
+       pods+0, unknown+0, ok+0, NR}'
 }
-eaig_dp=$(dp_containers kind-ai-gw-envoy envoy-gateway-system app.kubernetes.io/component=proxy)
-agw_dp=$(dp_containers kind-ai-gw-agent ai-demo gateway.networking.k8s.io/gateway-name=ai-gateway)
+
+p50() {
+  awk '{print $2}' | sort -n | awk '{a[NR]=$1} END {if (NR) print a[int((NR+1)/2)] " ms"; else print "n/a"}'
+}
+
+stream_usage() {
+  local count
+  count=$(curl -sS -m 25 "$1/v1/chat/completions" -H 'content-type: application/json' -d "$STREAM" | grep -c '"usage"' || true)
+  [[ "$count" -gt 0 ]] && echo yes || echo no
+}
+
+ready_replicas() {
+  kubectl --context "$1" -n ai-demo get deployment/kserve-mock-kserve -o 'jsonpath={.status.readyReplicas}/{.spec.replicas}' 2>/dev/null || echo n/a
+}
+
+owned_resources() {
+  kubectl --context "$1" -n ai-demo get deployment,service,inferencepool -o json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    items = json.load(sys.stdin).get("items", [])
+    print(sum(any(o.get("kind") == "LLMInferenceService" and o.get("name") == "kserve-mock"
+                  for o in item.get("metadata", {}).get("ownerReferences", []))
+              for item in items))
+except Exception:
+    print("n/a")'
+}
+
+policy_ready() {
+  kubectl --context kind-ai-gw-kuadrant -n ai-demo get ratelimitpolicy/kserve-mock -o json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    conditions = json.load(sys.stdin).get("status", {}).get("conditions", [])
+    ready = any(c.get("status") == "True" and c.get("type") in
+                ("Accepted", "Available", "Enforced") for c in conditions)
+    print("yes" if ready else "no")
+except Exception:
+    print("no")'
+}
+
+echo "collecting KServe comparison ($N requests per gateway)..." >&2
+ku_samples=$(samples http://localhost:8082)
+ea_samples=$(samples http://localhost:8080)
+ag_samples=$(samples http://localhost:8081)
+
+ku_gateway=$(condition_status kind-ai-gw-kuadrant gateway/ai-gateway Programmed)
+ea_gateway=$(condition_status kind-ai-gw-envoy gateway/ai-gateway Programmed)
+ag_gateway=$(condition_status kind-ai-gw-agent gateway/ai-gateway Programmed)
+ku_route="$(condition_status kind-ai-gw-kuadrant httproute/kserve-mock Accepted) / $(condition_status kind-ai-gw-kuadrant httproute/kserve-mock ResolvedRefs)"
+ea_route="$(condition_status kind-ai-gw-envoy httproute/kserve-mock Accepted) / $(condition_status kind-ai-gw-envoy httproute/kserve-mock ResolvedRefs)"
+ag_route="$(condition_status kind-ai-gw-agent httproute/kserve-mock Accepted) / $(condition_status kind-ai-gw-agent httproute/kserve-mock ResolvedRefs)"
+ku_llmisvc=$(condition_status kind-ai-gw-kuadrant llminferenceservice/kserve-mock Ready)
+ea_llmisvc=$(condition_status kind-ai-gw-envoy llminferenceservice/kserve-mock Ready)
+ag_llmisvc=$(condition_status kind-ai-gw-agent llminferenceservice/kserve-mock Ready)
 
 mkdir -p "$(dirname "$OUT")"
 cat > "$OUT" <<EOF
-# Gateway comparison — $(date -u '+%Y-%m-%d %H:%M UTC')
+# KServe gateway comparison — $(date -u '+%Y-%m-%d %H:%M UTC')
 
-Same mock OpenAI upstreams (\`alpha\` 0ms, \`beta\` 250ms) behind both gateways.
-Sample size: $N requests per measurement.
+All environments run KServe v0.20.0 with the same LLMInferenceService,
+two-replica CPU runtime, KServe-managed llm-d EPP, InferencePool, and HTTPRoute.
+Sample size: $N requests per gateway.
 
-| Check | Envoy AI Gateway v1.0.0 | agentgateway v1.4.1 |
-|---|---|---|
-| route model → alpha | \`$eaig_alpha\` | \`$agw_alpha\` |
-| route model → beta | \`$eaig_beta\` | \`$agw_beta\` |
-| streaming usage chunk | $( [ "${eaig_stream:-0}" -gt 0 ] && echo "yes" || echo "no" ) | $( [ "${agw_stream:-0}" -gt 0 ] && echo "yes" || echo "no" ) |
-| weighted 80/20 split | $eaig_split | $agw_split |
-| p50 latency (0ms upstream) | ${eaig_p50} ms | ${agw_p50} ms |
-| control+data plane pods | $eaig_pods | $agw_pods |
-| data plane containers | \`$eaig_dp\` | \`$agw_dp\` |
+| Check | Kuadrant + Envoy AI Gateway | Envoy AI Gateway | agentgateway |
+|---|---|---|---|
+| Gateway Programmed | $ku_gateway | $ea_gateway | $ag_gateway |
+| LLMInferenceService Ready | $ku_llmisvc | $ea_llmisvc | $ag_llmisvc |
+| HTTPRoute Accepted / ResolvedRefs | $ku_route | $ea_route | $ag_route |
+| workload replicas ready | $(ready_replicas kind-ai-gw-kuadrant) | $(ready_replicas kind-ai-gw-envoy) | $(ready_replicas kind-ai-gw-agent) |
+| KServe-owned Deployments/Services/Pool | $(owned_resources kind-ai-gw-kuadrant) | $(owned_resources kind-ai-gw-envoy) | $(owned_resources kind-ai-gw-agent) |
+| endpoint selection and success | $(printf '%s\n' "$ku_samples" | distribution) | $(printf '%s\n' "$ea_samples" | distribution) | $(printf '%s\n' "$ag_samples" | distribution) |
+| streaming usage chunk | $(stream_usage http://localhost:8082) | $(stream_usage http://localhost:8080) | $(stream_usage http://localhost:8081) |
+| p50 gateway-to-KServe latency | $(printf '%s\n' "$ku_samples" | p50) | $(printf '%s\n' "$ea_samples" | p50) | $(printf '%s\n' "$ag_samples" | p50) |
+| Kuadrant RateLimitPolicy ready | $(policy_ready) | n/a | n/a |
 
-## How the same intent is expressed
+## Shared path
 
-**Envoy AI Gateway** — model name is extracted from the JSON body into the
-\`x-ai-eg-model\` header before routing, so the route matches on model directly:
+    client -> Gateway -> HTTPRoute -> InferencePool
+           -> KServe-managed EPP -> selected KServe model pod
 
-    Backend -> AIServiceBackend -> AIGatewayRoute (matches x-ai-eg-model)
-
-**agentgateway** — a stock HTTPRoute selects an AgentgatewayBackend, which
-holds the provider/priority configuration:
-
-    Service -> AgentgatewayBackend (ai.groups[].providers[]) <- HTTPRoute
+Kuadrant is a policy layer. Its column uses Envoy Gateway with the Envoy AI
+Gateway InferencePool extension, matching the unprotected Envoy column while
+adding Kuadrant policy. Latency is a local smoke-test against a zero-delay
+mock, not a production benchmark.
 EOF
+
 echo "wrote $OUT" >&2
 cat "$OUT"

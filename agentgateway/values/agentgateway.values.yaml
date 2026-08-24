@@ -5,16 +5,9 @@ controller:
   logLevel: info
   replicaCount: 1
 
-# The AgentgatewayModel API is agentgateway's LLM-routing surface -- the closest
-# analogue to Envoy AI Gateway's AIGatewayRoute. It ships disabled, so an
-# apples-to-apples AI comparison has to turn it on explicitly.
-agentgatewayModels:
-  enabled: true
-
-# Gateway API Inference Extension (InferencePool). Off by default; enabling it
-# lets us compare model-aware load balancing on both sides.
+# KServe routes through a Gateway API Inference Extension InferencePool.
 inferenceExtension:
-  enabled: false
+  enabled: true
 
 resources:
   requests: {cpu: 50m, memory: 96Mi}

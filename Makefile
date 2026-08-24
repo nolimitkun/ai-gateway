@@ -1,56 +1,70 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
+
+KUADRANT_CLUSTER := ai-gw-kuadrant
 ENVOY_CLUSTER := ai-gw-envoy
 AGENT_CLUSTER := ai-gw-agent
+CLUSTERS := $(KUADRANT_CLUSTER) $(ENVOY_CLUSTER) $(AGENT_CLUSTER)
 
-.PHONY: help up down clusters install mocks expose compare features mcp status charts
+.PHONY: help up down clusters install runtime gateways kserve compare status charts agent-ui
 
 help: ## show targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-10s %s\n",$$1,$$2}'
 
-up: clusters install mocks expose ## build both clusters and deploy both gateways
+up: clusters install runtime gateways kserve ## build all three KServe gateway environments
 	@echo
+	@echo "Kuadrant         -> http://localhost:8082"
 	@echo "Envoy AI Gateway -> http://localhost:8080"
 	@echo "agentgateway     -> http://localhost:8081"
-	@echo "run 'make compare' to test both"
+	@echo "run 'make compare'"
 
-clusters: ## create the two kind clusters
+clusters: ## create one kind cluster per gateway stack
+	kind create cluster --config clusters/kind-kuadrant.yaml --wait 180s
 	kind create cluster --config clusters/kind-envoy-ai-gateway.yaml --wait 180s
 	kind create cluster --config clusters/kind-agentgateway.yaml --wait 180s
 
-install: ## install both gateway stacks from the vendored charts
+install: ## install Kuadrant+Envoy, Envoy AI Gateway, agentgateway, and KServe
+	bash scripts/install-kuadrant.sh
 	bash scripts/install-envoy-ai-gateway.sh
 	bash scripts/install-agentgateway.sh
+	bash scripts/install-kserve.sh
 
-mocks: ## deploy the mock OpenAI + MCP upstreams into both clusters
-	bash scripts/deploy-mock-llm.sh $(ENVOY_CLUSTER)
-	bash scripts/deploy-mock-llm.sh $(AGENT_CLUSTER)
-	bash scripts/deploy-mcp.sh $(ENVOY_CLUSTER)
-	bash scripts/deploy-mcp.sh $(AGENT_CLUSTER)
+runtime: ## publish the shared CPU mock runtime source in all clusters
+	@for cluster in $(CLUSTERS); do bash scripts/deploy-runtime.sh "$$cluster"; done
 
-expose: ## apply routing manifests and pin gateways to nodePort 30080
-	kubectl --context kind-$(ENVOY_CLUSTER) apply -f envoy-ai-gateway/manifests/
-	kubectl --context kind-$(AGENT_CLUSTER) apply -f agentgateway/manifests/
-	@sleep 20
-	bash scripts/expose-gateway.sh $(ENVOY_CLUSTER) envoy-gateway-system ai-gateway
+gateways: ## create the three Gateway API entry points
+	kubectl --context kind-$(KUADRANT_CLUSTER) apply -f kuadrant/manifests/gateway.yaml
+	kubectl --context kind-$(KUADRANT_CLUSTER) apply -f kuadrant/manifests/policy.yaml
+	kubectl --context kind-$(ENVOY_CLUSTER) apply -f envoy-ai-gateway/manifests/gateway.yaml
+	kubectl --context kind-$(AGENT_CLUSTER) apply -f agentgateway/manifests/gateway.yaml
+	@sleep 15
 	bash scripts/expose-gateway.sh $(AGENT_CLUSTER) ai-demo ai-gateway
 
-compare: ## run the functional suite against both gateways
+kserve: ## deploy the same KServe LLMInferenceService into all three clusters
+	bash scripts/deploy-kserve.sh
+
+compare: ## compare all gateways through the single KServe path
 	bash compare/run-comparison.sh
 
-features: ## run the deeper feature probes (translation, auth, formats)
-	bash compare/feature-matrix.sh
+agent-ui: ## expose agentgateway UI at http://localhost:15000/ui
+	@POD="$$(kubectl --context kind-$(AGENT_CLUSTER) -n ai-demo get pod \
+		-l gateway.networking.k8s.io/gateway-name=ai-gateway \
+		-o jsonpath='{.items[0].metadata.name}')"; \
+		test -n "$$POD" || { echo "agentgateway proxy pod not found; run 'make up' first" >&2; exit 1; }; \
+		echo "agentgateway UI -> http://localhost:15000/ui (Ctrl-C to stop)"; \
+		kubectl --context kind-$(AGENT_CLUSTER) -n ai-demo port-forward \
+			--address 127.0.0.1 "pod/$$POD" 15000:15000
 
-mcp: ## run the MCP conformance probe against both gateways
-	python3 compare/mcp-test.py
+status: ## show KServe and gateway readiness in all clusters
+	@for cluster in $(CLUSTERS); do \
+		echo "=== $$cluster ==="; \
+		kubectl --context "kind-$$cluster" get gateway,httproute,llminferenceservice,inferencepool -n ai-demo; \
+	done
 
-status: ## show pods in both clusters
-	@echo "=== $(ENVOY_CLUSTER) ==="; kubectl --context kind-$(ENVOY_CLUSTER) get pods -A --no-headers | grep -vE 'kube-system|local-path'
-	@echo "=== $(AGENT_CLUSTER) ==="; kubectl --context kind-$(AGENT_CLUSTER) get pods -A --no-headers | grep -vE 'kube-system|local-path'
-
-charts: ## re-pull the helm charts and refresh the vendored default values
+charts: ## refresh vendored gateway, Kuadrant, and KServe charts
 	bash scripts/pull-charts.sh
 
-down: ## delete both clusters
+down: ## delete all three kind clusters
+	-kind delete cluster --name $(KUADRANT_CLUSTER)
 	-kind delete cluster --name $(ENVOY_CLUSTER)
 	-kind delete cluster --name $(AGENT_CLUSTER)
