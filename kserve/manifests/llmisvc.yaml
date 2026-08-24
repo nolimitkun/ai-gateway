@@ -2,7 +2,8 @@
 # replicas, their Service, the llm-d EPP, and the GAIE InferencePool. The model
 # URI is descriptive only: storage initialization is deliberately disabled and
 # the multi-task Python mock is mounted as a custom runtime. One workload serves
-# chat completions, embeddings, reranking, and speech-to-text through /v1.
+# chat completions, embeddings, reranking, and speech-to-text through /v1, and
+# advertises the tiered mock model catalog on /v1/models.
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:

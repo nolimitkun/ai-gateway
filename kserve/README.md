@@ -44,10 +44,16 @@ with every gateway without provider-specific paths:
 
 | Endpoint | Compatibility shape |
 |---|---|
+| `/v1/models` | OpenAI model list and retrieve, with task and tier metadata |
 | `/v1/chat/completions` | OpenAI chat and server-sent event streaming |
 | `/v1/embeddings` | OpenAI embeddings response list |
 | `/v1/rerank` | common query/documents reranking schema |
-| `/v1/audio/transcriptions` | OpenAI multipart transcription upload |
+| `/v1/audio/transcriptions` | OpenAI multipart transcription upload, with segments and diarization |
+
+One process answers for every model in the catalog. The tiered chat, STT, and
+retrieval model identifiers are fixtures for gateway routing and allow-list
+tests, not separate workloads; see the mock model catalog in the root
+[README](../README.md).
 
 ## Why a mock runtime
 
