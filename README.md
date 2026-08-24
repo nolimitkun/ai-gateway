@@ -61,19 +61,22 @@ gateway-selection header is required because there is no alternate route.
 
 ### Mock inference APIs
 
-The shared CPU runtime exposes four deterministic APIs:
+The shared CPU runtime exposes five deterministic APIs:
 
 | Capability | Endpoint | Request format | Mock behavior |
 |---|---|---|---|
-| chat | `POST /v1/chat/completions` | OpenAI JSON, including streaming | identifies the selected KServe pod and returns usage |
-| embeddings | `POST /v1/embeddings` | OpenAI JSON with string or string-array `input` | returns normalized, deterministic 8-dimensional vectors |
+| model catalog | `GET /v1/models` | optional `task` and `tier` query filters | lists every mock model with its task, tier, and capability metadata |
+| chat | `POST /v1/chat/completions` | OpenAI JSON, including streaming | identifies the selected KServe pod and returns tier-dependent usage |
+| embeddings | `POST /v1/embeddings` | OpenAI JSON with string or string-array `input` | returns normalized, deterministic vectors at the model's dimensionality |
 | reranking | `POST /v1/rerank` | JSON with `query`, `documents`, and optional `top_n` | ranks documents by deterministic token overlap |
-| speech-to-text | `POST /v1/audio/transcriptions` | OpenAI-style multipart `file` and `model` fields | returns a deterministic transcription containing the filename and byte count |
+| speech-to-text | `POST /v1/audio/transcriptions` | OpenAI-style multipart `file` and `model` fields, plus `response_format`, `diarization`, and `num_speakers` | returns a deterministic transcript, timestamped segments, and speaker turns |
 
 Use any of the three gateway base URLs with the same requests:
 
 ```bash
 BASE=http://localhost:8082
+
+curl "$BASE/v1/models?task=chat&tier=big"
 
 curl "$BASE/v1/embeddings" \
   -H 'content-type: application/json' \
@@ -86,6 +89,147 @@ curl "$BASE/v1/rerank" \
 curl "$BASE/v1/audio/transcriptions" \
   -F 'file=@sample.wav;type=audio/wav' \
   -F 'model=mock-whisper'
+```
+
+### Mock model catalog
+
+Every model below is a fixture. No weights are loaded and no vendor API is
+contacted: the identifiers, tiers, and capability flags exist so gateway model
+routing, allow-lists, and OpenAI-compatible clients can be tested against a
+realistic model list. A request for a model that is not in the catalog returns
+HTTP 404 with `model_not_found`, and a model used for the wrong task returns
+HTTP 400.
+
+Chat models, by tier:
+
+| Model | Tier | Accelerator | Context window | Max output |
+|---|---|---|---:|---:|
+| `kimi-k3` | big | B300 | 262144 | 16384 |
+| `glm-5.3` | big | B300 | 204800 | 16384 |
+| `deepseek-v4-pro` | big | B300 | 163840 | 32768 |
+| `deepseek-v4-flash` | medium | H200 | 131072 | 8192 |
+| `qwen3.8-27b` | small | H100 | 65536 | 8192 |
+| `mock-kserve` | fixture | CPU | 8192 | 1024 |
+
+The tier is visible in the response: `mock_tier`, the reported
+`completion_tokens`, and the assistant message all follow it, so a routing rule
+that is supposed to send a request to a small model can be checked from the
+response alone. `max_tokens` above a model's output limit returns HTTP 400 with
+`context_length_exceeded`; below the tier's own completion length it truncates
+the answer, reports the requested token count, and finishes with `length`.
+
+```bash
+curl "$BASE/v1/chat/completions" \
+  -H 'content-type: application/json' \
+  -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hello"}]}'
+```
+
+Speech-to-text models, with ASR and diarization:
+
+| Model | Tier | Accelerator | ASR | Diarization | Max speakers |
+|---|---|---|---|---|---:|
+| `whisper-large-v3` | big | L40S | yes | yes | 8 |
+| `voxtral-small-24b` | big | H100 | yes | yes | 8 |
+| `voxtral-mini-3b` | small | L40S | yes | no | 1 |
+| `mock-whisper` | fixture | CPU | yes | yes | 4 |
+
+`response_format=verbose_json` adds timestamped segments. `diarization=true`
+labels each segment with a `SPEAKER_NN` turn and adds a per-speaker summary;
+`num_speakers` pins the speaker count, and the transcript grows to give every
+pinned speaker a turn. Diarization on an ASR-only model such as
+`voxtral-mini-3b` returns HTTP 400. Whisper has no native diarization, so that
+flag mirrors the usual whisper plus speaker-attribution pipeline rather than a
+single model.
+
+```bash
+curl "$BASE/v1/audio/transcriptions" \
+  -F 'file=@meeting.wav;type=audio/wav' \
+  -F 'model=whisper-large-v3' \
+  -F 'response_format=verbose_json' \
+  -F 'diarization=true' \
+  -F 'num_speakers=3'
+```
+
+Embedding and reranking models for retrieval-augmented generation:
+
+| Model | Task | Tier | Accelerator | Dimensions | Shortened dimensions |
+|---|---|---|---|---:|---|
+| `qwen3-embedding-8b` | embedding | big | H100 | 4096 | yes |
+| `e5-mistral-7b-instruct` | embedding | big | H100 | 4096 | no |
+| `bge-m3` | embedding | medium | L40S | 1024 | no |
+| `jina-embeddings-v3` | embedding | medium | L40S | 1024 | yes |
+| `nomic-embed-text-v2-moe` | embedding | small | L40S | 768 | yes |
+| `mock-embedding` | embedding | fixture | CPU | 8 | no |
+| `bge-reranker-v2-m3` | rerank | medium | L40S | n/a | n/a |
+| `jina-reranker-v2-base-multilingual` | rerank | small | L40S | n/a | n/a |
+| `mock-reranker` | rerank | fixture | CPU | n/a | n/a |
+
+Models that support shortened dimensions accept a `dimensions` value below
+their native width, which is how Matryoshka embeddings are truncated in a RAG
+index; the others reject it. A full RAG path — embed, retrieve, rerank — can be
+exercised end to end through any gateway:
+
+```bash
+curl "$BASE/v1/embeddings" \
+  -H 'content-type: application/json' \
+  -d '{"model":"qwen3-embedding-8b","input":["gateway inference"],"dimensions":1024}'
+
+curl "$BASE/v1/rerank" \
+  -H 'content-type: application/json' \
+  -d '{"model":"bge-reranker-v2-m3","query":"gateway inference","documents":["unrelated","gateway inference routing"],"top_n":1}'
+```
+
+### Accelerator pools
+
+Models of different sizes do not share a card. `make pools` adds one KServe
+serving pool per accelerator class alongside the shared service, so each model
+is served from the pool its weights are sized for:
+
+| Pool | Accelerator | Tier | Models |
+|---|---|---|---|
+| `kserve-b300` | NVIDIA B300 | big | `kimi-k3`, `glm-5.3`, `deepseek-v4-pro` |
+| `kserve-h200` | NVIDIA H200 | medium | `deepseek-v4-flash` |
+| `kserve-h100` | NVIDIA H100 | small and large others | `qwen3.8-27b`, `qwen3-embedding-8b`, `e5-mistral-7b-instruct`, `voxtral-small-24b` |
+| `kserve-l40s` | NVIDIA L40S | light others | `bge-m3`, `jina-embeddings-v3`, `nomic-embed-text-v2-moe`, both rerankers, `whisper-large-v3`, `voxtral-mini-3b` |
+| `kserve-mock` | CPU | fixture | `mock-kserve`, `mock-embedding`, `mock-reranker`, `mock-whisper` |
+
+Each pool is a full `LLMInferenceService`: its own workload, endpoint picker,
+`InferencePool`, and `HTTPRoute`. A pool replica serves only the models of its
+class — `ACCELERATOR` in the pod environment selects the slice of the catalog —
+and returns HTTP 404 `model_not_served_here`, naming the correct class, for
+anything else. That makes a misrouted request visible instead of silently
+answered by the wrong hardware.
+
+Requests select a pool with an `x-model-class` header, which Istio/Envoy, Envoy
+AI Gateway, and agentgateway all match identically; body-based model routing is
+provider-specific. Requests without the header keep going to the shared
+`kserve-mock` route:
+
+```bash
+curl "$BASE/v1/chat/completions" \
+  -H 'content-type: application/json' \
+  -H 'x-model-class: b300' \
+  -d '{"model":"kimi-k3","messages":[{"role":"user","content":"hello"}]}'
+```
+
+The response reports the class that served it:
+
+```json
+{"model": "kimi-k3", "mock_tier": "big", "mock_accelerator": "b300", "...": "..."}
+```
+
+`GET /v1/models` on a pool lists only that pool's models, and `/health` reports
+its accelerator class, so a pool's inventory can be read from the pool itself.
+
+kind has no accelerators, so `make pools` deploys the pools with the CPU mock
+and CPU requests: the topology, routing, and per-pool catalogs are real, the
+hardware is not. `kserve/overlays/gpu` carries the same pools with the node
+selector, `nvidia.com/gpu` request, and toleration each class needs on a GPU
+cluster, where the mock container is also replaced by a real runtime.
+
+```bash
+make pools        # add the four accelerator pools to all three clusters
+make pools-down   # remove them; the shared KServe path stays up
 ```
 
 Useful targets:
@@ -199,7 +343,7 @@ flowchart LR
     LLMISVC["LLMInferenceService/kserve-mock<br/>serving.kserve.io/v1alpha2"]
     EPP["llm-d EPP<br/>Deployment + Service"]
     WORKLOAD["model workload<br/>Deployment + Service"]
-    PODS["2 multi-task inference pods<br/>chat + embeddings + rerank + STT"]
+    PODS["2 multi-task inference pods<br/>catalog + chat + embeddings + rerank + STT"]
   end
 
   KU -->|attaches policy| ROUTE
@@ -297,9 +441,13 @@ router:
   and pool;
 - successful distribution across both model pods;
 - OpenAI streaming with a usage chunk;
+- the model catalog on `GET /v1/models` and tier-correct chat routing across the
+  big, medium, and small models;
 - OpenAI-compatible embeddings with deterministic 8-dimensional vectors;
+- RAG embedding models at their native 4096- and 1024-dimensional widths;
 - deterministic reranking and `top_n` ordering;
 - multipart speech-to-text upload and response handling;
+- speaker diarization with consistent segment and speaker labels;
 - local p50 request latency;
 - Kuadrant `RateLimitPolicy` readiness.
 
@@ -345,6 +493,8 @@ kuadrant/             OpenShift-style Gateway overlay, Istio provider, and Kuadr
 envoy-ai-gateway/     pinned charts, values, and Gateway
 agentgateway/         pinned charts, values, and Gateway
 kserve/               controller charts, LLMInferenceService, route, and presets
+kserve/pools/         one serving pool per accelerator class
+kserve/overlays/gpu/  accelerator placement for those pools on a GPU cluster
 mock-llm/              deterministic multi-task CPU runtime and tests
 scripts/               install and deployment orchestration
 compare/               single three-gateway KServe comparison and raw results
@@ -353,11 +503,15 @@ compare/               single three-gateway KServe comparison and raw results
 ## Production model
 
 The laptop fixture disables storage initialization and mounts a small Python
-server from a ConfigMap. Serving chat, embeddings, reranking, and STT from one
+server from a ConfigMap. The catalog is a fixture as well: one process answers
+for every model identifier it advertises. Serving chat, embeddings, reranking,
+and STT from one
 `LLMInferenceService` is deliberately a gateway integration fixture, not a
 production model topology. For production, deploy a model runtime suited to
 each task, give each workload its own scaling and accelerator profile, and
-route the corresponding API to that backend. For an LLM, restore the KServe
+route the corresponding API to that backend. `make pools` and
+`kserve/overlays/gpu` show that split: one `LLMInferenceService` per
+accelerator class, each with its own endpoint picker, pool, and route. For an LLM, restore the KServe
 vLLM runtime preset, GPU resources, storage initialization, and telemetry-aware
 scheduler plugins.
 

@@ -1,0 +1,74 @@
+# Istio verifies each pool's TLS-secured endpoint picker with the CA ConfigMap
+# that deploy-kserve.sh generates for the base service. All pool certificates
+# share that CA, so one ConfigMap covers every pool.
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: kserve-b300-epp
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: kserve-b300-epp-service
+      sectionName: grpc
+  validation:
+    hostname: kserve-b300-epp-service.ai-demo.svc.cluster.local
+    caCertificateRefs:
+      - group: ""
+        kind: ConfigMap
+        name: kserve-mock-epp-ca
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: kserve-h200-epp
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: kserve-h200-epp-service
+      sectionName: grpc
+  validation:
+    hostname: kserve-h200-epp-service.ai-demo.svc.cluster.local
+    caCertificateRefs:
+      - group: ""
+        kind: ConfigMap
+        name: kserve-mock-epp-ca
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: kserve-h100-epp
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: kserve-h100-epp-service
+      sectionName: grpc
+  validation:
+    hostname: kserve-h100-epp-service.ai-demo.svc.cluster.local
+    caCertificateRefs:
+      - group: ""
+        kind: ConfigMap
+        name: kserve-mock-epp-ca
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: kserve-l40s-epp
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: kserve-l40s-epp-service
+      sectionName: grpc
+  validation:
+    hostname: kserve-l40s-epp-service.ai-demo.svc.cluster.local
+    caCertificateRefs:
+      - group: ""
+        kind: ConfigMap
+        name: kserve-mock-epp-ca

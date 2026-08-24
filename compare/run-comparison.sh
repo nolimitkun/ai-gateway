@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Compare chat, embeddings, reranking, and STT through one KServe service.
+# Compare the model catalog, chat, embeddings, reranking, and STT through one
+# KServe service.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:-$ROOT/compare/results/comparison-$(date +%Y%m%d-%H%M%S).md}"
@@ -89,6 +90,76 @@ except Exception:
     print("no")'
 }
 
+models_api() {
+  local response
+  response=$(curl -sS -m 25 "$1/v1/models" || true)
+  printf '%s' "$response" | python3 -c '
+import json, sys
+expected = {"kimi-k3", "glm-5.3", "deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-27b",
+            "whisper-large-v3", "voxtral-small-24b", "qwen3-embedding-8b", "bge-m3"}
+try:
+    data = json.load(sys.stdin).get("data", [])
+    ids = {card.get("id") for card in data}
+    print(f"{len(data)} models" if expected <= ids else "no")
+except Exception:
+    print("no")'
+}
+
+tiered_chat() {
+  local base="$1" tier model results=""
+  for pair in big:kimi-k3 medium:deepseek-v4-flash small:qwen3.8-27b; do
+    tier=${pair%%:*}
+    model=${pair#*:}
+    results+=$(curl -sS -m 25 "$base/v1/chat/completions" \
+      -H 'content-type: application/json' \
+      -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hello through KServe\"}]}" |
+      python3 -c "
+import json, sys
+try:
+    body = json.load(sys.stdin)
+    print('yes' if body.get('model') == '$model' and body.get('mock_tier') == '$tier' else 'no')
+except Exception:
+    print('no')")
+  done
+  [[ "$results" == "yesyesyes" ]] && echo "big/medium/small" || echo no
+}
+
+rag_embeddings_api() {
+  local base="$1" response results=""
+  for pair in qwen3-embedding-8b:4096 bge-m3:1024; do
+    response=$(curl -sS -m 25 "$base/v1/embeddings" \
+      -H 'content-type: application/json' \
+      -d "{\"model\":\"${pair%%:*}\",\"input\":[\"retrieval augmented generation\"]}" || true)
+    results+=$(printf '%s' "$response" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin).get('data', [])
+    print('yes' if len(data) == 1 and len(data[0].get('embedding', [])) == ${pair##*:} else 'no')
+except Exception:
+    print('no')")
+  done
+  [[ "$results" == "yesyes" ]] && echo yes || echo no
+}
+
+diarization_api() {
+  local response
+  response=$(curl -sS -m 25 "$1/v1/audio/transcriptions" \
+    -F 'file=@/dev/null;filename=meeting.wav;type=audio/wav' \
+    -F 'model=whisper-large-v3' \
+    -F 'diarization=true' \
+    -F 'num_speakers=3' || true)
+  printf '%s' "$response" | python3 -c '
+import json, sys
+try:
+    body = json.load(sys.stdin)
+    speakers = {segment.get("speaker") for segment in body.get("segments", [])}
+    valid = (body.get("diarization") is True and speakers and
+             speakers == {entry.get("id") for entry in body.get("speakers", [])})
+    print(f"{len(speakers)} speakers" if valid else "no")
+except Exception:
+    print("no")'
+}
+
 stt_api() {
   local response
   response=$(curl -sS -m 25 "$1/v1/audio/transcriptions" \
@@ -167,7 +238,11 @@ Sample size: $N requests per gateway.
 | streaming usage chunk | $(stream_usage http://localhost:8082) | $(stream_usage http://localhost:8080) | $(stream_usage http://localhost:8081) |
 | embeddings API | $(embeddings_api http://localhost:8082) | $(embeddings_api http://localhost:8080) | $(embeddings_api http://localhost:8081) |
 | reranking API | $(rerank_api http://localhost:8082) | $(rerank_api http://localhost:8080) | $(rerank_api http://localhost:8081) |
+| model catalog (GET /v1/models) | $(models_api http://localhost:8082) | $(models_api http://localhost:8080) | $(models_api http://localhost:8081) |
+| tiered chat models | $(tiered_chat http://localhost:8082) | $(tiered_chat http://localhost:8080) | $(tiered_chat http://localhost:8081) |
+| RAG embedding models | $(rag_embeddings_api http://localhost:8082) | $(rag_embeddings_api http://localhost:8080) | $(rag_embeddings_api http://localhost:8081) |
 | speech-to-text API | $(stt_api http://localhost:8082) | $(stt_api http://localhost:8080) | $(stt_api http://localhost:8081) |
+| speaker diarization | $(diarization_api http://localhost:8082) | $(diarization_api http://localhost:8080) | $(diarization_api http://localhost:8081) |
 | p50 gateway-to-KServe latency | $(printf '%s\n' "$ku_samples" | p50) | $(printf '%s\n' "$ea_samples" | p50) | $(printf '%s\n' "$ag_samples" | p50) |
 | Kuadrant RateLimitPolicy ready | $(policy_ready) | n/a | n/a |
 

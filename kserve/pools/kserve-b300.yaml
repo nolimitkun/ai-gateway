@@ -1,21 +1,60 @@
-# CPU-only KServe LLMInferenceService fixture. KServe manages the two model
-# replicas, their Service, the llm-d EPP, and the GAIE InferencePool. The model
-# URI is descriptive only: storage initialization is deliberately disabled and
-# the multi-task Python mock is mounted as a custom runtime. One workload serves
-# chat completions, embeddings, reranking, and speech-to-text through /v1, and
-# advertises the tiered mock model catalog on /v1/models.
+# NVIDIA B300 serving pool (big tier).
+#
+# Models: kimi-k3, glm-5.3, deepseek-v4-pro
+#
+# This pool serves the big chat models: the largest weights and KV cache in the
+# catalog, so they take the highest-memory cards.
+#
+# On kind there are no accelerators, so the workload keeps the CPU mock and its
+# CPU requests; the pool is real KServe topology with a real InferencePool, EPP,
+# and route. `kserve/overlays/gpu` adds the node selector, toleration, and
+# nvidia.com/gpu request that the same pool needs on a GPU cluster.
+# Header-based routing to the b300 accelerator pool. Body-based model routing
+# is provider-specific; an `x-model-class` header is matched identically by
+# Istio/Envoy, Envoy AI Gateway, and agentgateway, so the same route works in
+# all three clusters. Requests without the header keep using the shared
+# kserve-mock route.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kserve-b300
+  namespace: ai-demo
+  labels:
+    ai-gateway.mock/accelerator: b300
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+          headers:
+            - name: x-model-class
+              value: b300
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-b300-inference-pool
+      timeouts:
+        request: 60s
+---
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
-  name: kserve-mock
+  name: kserve-b300
   namespace: ai-demo
+  labels:
+    ai-gateway.mock/accelerator: b300
 spec:
   model:
-    uri: hf://local/kserve-mock
-    name: mock-kserve
+    uri: hf://local/kimi-k3
+    name: kimi-k3
   storageInitializer:
     enabled: false
-  replicas: 2
+  replicas: 1
   template:
     containers:
       - name: main
@@ -24,7 +63,9 @@ spec:
         command: [python3, /srv/server.py]
         env:
           - name: MODEL_NAME
-            value: mock-kserve
+            value: kimi-k3
+          - name: ACCELERATOR
+            value: b300
           - name: UPSTREAM_ID
             valueFrom:
               fieldRef:
@@ -63,7 +104,7 @@ spec:
     route:
       http:
         refs:
-          - name: kserve-mock
+          - name: kserve-b300
     scheduler:
       replicas: 1
       pool:
@@ -73,11 +114,11 @@ spec:
           appProtocol: http
           selector:
             matchLabels:
-              app.kubernetes.io/name: kserve-mock
+              app.kubernetes.io/name: kserve-b300
               app.kubernetes.io/part-of: llminferenceservice
               kserve.io/component: workload
           endpointPickerRef:
-            name: kserve-mock-epp-service
+            name: kserve-b300-epp-service
             port:
               number: 9002
             failureMode: FailOpen
@@ -106,7 +147,7 @@ spec:
             imagePullPolicy: IfNotPresent
             args:
               - --pool-name
-              - kserve-mock-inference-pool
+              - kserve-b300-inference-pool
               - --pool-namespace
               - ai-demo
               - --pool-group
@@ -154,4 +195,4 @@ spec:
         volumes:
           - name: tls-certs
             secret:
-              secretName: kserve-mock-kserve-self-signed-certs
+              secretName: kserve-b300-kserve-self-signed-certs

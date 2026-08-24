@@ -1,21 +1,61 @@
-# CPU-only KServe LLMInferenceService fixture. KServe manages the two model
-# replicas, their Service, the llm-d EPP, and the GAIE InferencePool. The model
-# URI is descriptive only: storage initialization is deliberately disabled and
-# the multi-task Python mock is mounted as a custom runtime. One workload serves
-# chat completions, embeddings, reranking, and speech-to-text through /v1, and
-# advertises the tiered mock model catalog on /v1/models.
+# NVIDIA L40S serving pool (small tier).
+#
+# Models: bge-m3, jina-embeddings-v3, nomic-embed-text-v2-moe, bge-reranker-v2-m3,
+# jina-reranker-v2-base-multilingual, whisper-large-v3, voxtral-mini-3b
+#
+# This pool serves the light retrieval, reranking, and speech models, which are
+# throughput-bound rather than memory-bound.
+#
+# On kind there are no accelerators, so the workload keeps the CPU mock and its
+# CPU requests; the pool is real KServe topology with a real InferencePool, EPP,
+# and route. `kserve/overlays/gpu` adds the node selector, toleration, and
+# nvidia.com/gpu request that the same pool needs on a GPU cluster.
+# Header-based routing to the l40s accelerator pool. Body-based model routing
+# is provider-specific; an `x-model-class` header is matched identically by
+# Istio/Envoy, Envoy AI Gateway, and agentgateway, so the same route works in
+# all three clusters. Requests without the header keep using the shared
+# kserve-mock route.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kserve-l40s
+  namespace: ai-demo
+  labels:
+    ai-gateway.mock/accelerator: l40s
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+          headers:
+            - name: x-model-class
+              value: l40s
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-l40s-inference-pool
+      timeouts:
+        request: 60s
+---
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
-  name: kserve-mock
+  name: kserve-l40s
   namespace: ai-demo
+  labels:
+    ai-gateway.mock/accelerator: l40s
 spec:
   model:
-    uri: hf://local/kserve-mock
-    name: mock-kserve
+    uri: hf://local/bge-m3
+    name: bge-m3
   storageInitializer:
     enabled: false
-  replicas: 2
+  replicas: 1
   template:
     containers:
       - name: main
@@ -24,7 +64,9 @@ spec:
         command: [python3, /srv/server.py]
         env:
           - name: MODEL_NAME
-            value: mock-kserve
+            value: bge-m3
+          - name: ACCELERATOR
+            value: l40s
           - name: UPSTREAM_ID
             valueFrom:
               fieldRef:
@@ -63,7 +105,7 @@ spec:
     route:
       http:
         refs:
-          - name: kserve-mock
+          - name: kserve-l40s
     scheduler:
       replicas: 1
       pool:
@@ -73,11 +115,11 @@ spec:
           appProtocol: http
           selector:
             matchLabels:
-              app.kubernetes.io/name: kserve-mock
+              app.kubernetes.io/name: kserve-l40s
               app.kubernetes.io/part-of: llminferenceservice
               kserve.io/component: workload
           endpointPickerRef:
-            name: kserve-mock-epp-service
+            name: kserve-l40s-epp-service
             port:
               number: 9002
             failureMode: FailOpen
@@ -106,7 +148,7 @@ spec:
             imagePullPolicy: IfNotPresent
             args:
               - --pool-name
-              - kserve-mock-inference-pool
+              - kserve-l40s-inference-pool
               - --pool-namespace
               - ai-demo
               - --pool-group
@@ -154,4 +196,4 @@ spec:
         volumes:
           - name: tls-certs
             secret:
-              secretName: kserve-mock-kserve-self-signed-certs
+              secretName: kserve-l40s-kserve-self-signed-certs

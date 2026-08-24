@@ -1,0 +1,108 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Accelerator placement for the pools in kserve/pools on a GPU cluster. kind
+# has no accelerators, so `make pools` applies kserve/pools without this
+# overlay and every pool lands on CPU.
+#
+# This overlay only adds placement and device requests. A real deployment also
+# replaces the mock container with a task-appropriate runtime — vLLM for the
+# chat pools, an embedding or ASR server for the others — and enables storage
+# initialization so the model is pulled instead of mounted from a ConfigMap.
+resources:
+  - ../../pools
+patches:
+  # NVIDIA-B300: big chat
+  - target:
+      group: serving.kserve.io
+      version: v1alpha2
+      kind: LLMInferenceService
+      name: kserve-b300
+    patch: |-
+      - op: add
+        path: /spec/template/nodeSelector
+        value:
+          nvidia.com/gpu.product: NVIDIA-B300
+      - op: add
+        path: /spec/template/tolerations
+        value:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+      - op: add
+        path: /spec/template/containers/0/resources/limits/nvidia.com~1gpu
+        value: "8"
+      - op: add
+        path: /spec/template/containers/0/resources/requests/nvidia.com~1gpu
+        value: "8"
+
+  # NVIDIA-H200: medium chat
+  - target:
+      group: serving.kserve.io
+      version: v1alpha2
+      kind: LLMInferenceService
+      name: kserve-h200
+    patch: |-
+      - op: add
+        path: /spec/template/nodeSelector
+        value:
+          nvidia.com/gpu.product: NVIDIA-H200
+      - op: add
+        path: /spec/template/tolerations
+        value:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+      - op: add
+        path: /spec/template/containers/0/resources/limits/nvidia.com~1gpu
+        value: "4"
+      - op: add
+        path: /spec/template/containers/0/resources/requests/nvidia.com~1gpu
+        value: "4"
+
+  # NVIDIA-H100-80GB-HBM3: small chat, large embedding, large audio
+  - target:
+      group: serving.kserve.io
+      version: v1alpha2
+      kind: LLMInferenceService
+      name: kserve-h100
+    patch: |-
+      - op: add
+        path: /spec/template/nodeSelector
+        value:
+          nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+      - op: add
+        path: /spec/template/tolerations
+        value:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+      - op: add
+        path: /spec/template/containers/0/resources/limits/nvidia.com~1gpu
+        value: "2"
+      - op: add
+        path: /spec/template/containers/0/resources/requests/nvidia.com~1gpu
+        value: "2"
+
+  # NVIDIA-L40S: light embedding, reranking, speech
+  - target:
+      group: serving.kserve.io
+      version: v1alpha2
+      kind: LLMInferenceService
+      name: kserve-l40s
+    patch: |-
+      - op: add
+        path: /spec/template/nodeSelector
+        value:
+          nvidia.com/gpu.product: NVIDIA-L40S
+      - op: add
+        path: /spec/template/tolerations
+        value:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+      - op: add
+        path: /spec/template/containers/0/resources/limits/nvidia.com~1gpu
+        value: "1"
+      - op: add
+        path: /spec/template/containers/0/resources/requests/nvidia.com~1gpu
+        value: "1"

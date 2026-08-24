@@ -10,23 +10,292 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL = os.getenv("MODEL_NAME", "mock-kserve")
 UPSTREAM = os.getenv("UPSTREAM_ID", "unknown")
+# Accelerator class of the node pool this replica runs on. Empty serves the
+# whole catalog from one pod, which is what the single-service fixture does.
+ACCELERATOR = os.getenv("ACCELERATOR", "").strip().lower()
 PORT = int(os.getenv("PORT", "8000"))
 EMBEDDING_DIMENSIONS = 8
+CREATED = 1767225600
+
+# Deterministic mock catalog. Every entry is a fixture: no weights are loaded
+# and no vendor API is contacted. The identifiers, tiers, and capability flags
+# exist so gateway routing, model allow-lists, and client SDKs can be tested
+# against a realistic model list.
+CATALOG = [
+    {
+        "id": "kimi-k3",
+        "accelerator": "b300",
+        "task": "chat",
+        "tier": "big",
+        "owned_by": "moonshot-ai",
+        "context_window": 262144,
+        "max_output_tokens": 16384,
+        "features": ["chat", "streaming", "tools"],
+    },
+    {
+        "id": "glm-5.3",
+        "accelerator": "b300",
+        "task": "chat",
+        "tier": "big",
+        "owned_by": "zhipu-ai",
+        "context_window": 204800,
+        "max_output_tokens": 16384,
+        "features": ["chat", "streaming", "tools"],
+    },
+    {
+        "id": "deepseek-v4-pro",
+        "accelerator": "b300",
+        "task": "chat",
+        "tier": "big",
+        "owned_by": "deepseek",
+        "context_window": 163840,
+        "max_output_tokens": 32768,
+        "features": ["chat", "streaming", "tools", "reasoning"],
+    },
+    {
+        "id": "deepseek-v4-flash",
+        "accelerator": "h200",
+        "task": "chat",
+        "tier": "medium",
+        "owned_by": "deepseek",
+        "context_window": 131072,
+        "max_output_tokens": 8192,
+        "features": ["chat", "streaming", "tools"],
+    },
+    {
+        "id": "qwen3.8-27b",
+        "accelerator": "h100",
+        "task": "chat",
+        "tier": "small",
+        "owned_by": "alibaba",
+        "context_window": 65536,
+        "max_output_tokens": 8192,
+        "features": ["chat", "streaming", "tools"],
+    },
+    {
+        "id": "mock-kserve",
+        "accelerator": "cpu",
+        "task": "chat",
+        "tier": "fixture",
+        "owned_by": "kserve-mock",
+        "context_window": 8192,
+        "max_output_tokens": 1024,
+        "features": ["chat", "streaming"],
+    },
+    {
+        "id": "qwen3-embedding-8b",
+        "accelerator": "h100",
+        "task": "embedding",
+        "tier": "big",
+        "owned_by": "alibaba",
+        "context_window": 32768,
+        "dimensions": 4096,
+        "matryoshka": True,
+        "features": ["retrieval", "multilingual", "instruction-prefix"],
+    },
+    {
+        "id": "bge-m3",
+        "accelerator": "l40s",
+        "task": "embedding",
+        "tier": "medium",
+        "owned_by": "baai",
+        "context_window": 8192,
+        "dimensions": 1024,
+        "matryoshka": False,
+        "features": ["retrieval", "multilingual", "long-context"],
+    },
+    {
+        "id": "e5-mistral-7b-instruct",
+        "accelerator": "h100",
+        "task": "embedding",
+        "tier": "big",
+        "owned_by": "microsoft",
+        "context_window": 32768,
+        "dimensions": 4096,
+        "matryoshka": False,
+        "features": ["retrieval", "instruction-prefix"],
+    },
+    {
+        "id": "jina-embeddings-v3",
+        "accelerator": "l40s",
+        "task": "embedding",
+        "tier": "medium",
+        "owned_by": "jina-ai",
+        "context_window": 8192,
+        "dimensions": 1024,
+        "matryoshka": True,
+        "features": ["retrieval", "multilingual", "task-lora"],
+    },
+    {
+        "id": "nomic-embed-text-v2-moe",
+        "accelerator": "l40s",
+        "task": "embedding",
+        "tier": "small",
+        "owned_by": "nomic-ai",
+        "context_window": 2048,
+        "dimensions": 768,
+        "matryoshka": True,
+        "features": ["retrieval", "multilingual"],
+    },
+    {
+        "id": "mock-embedding",
+        "accelerator": "cpu",
+        "task": "embedding",
+        "tier": "fixture",
+        "owned_by": "kserve-mock",
+        "context_window": 2048,
+        "dimensions": EMBEDDING_DIMENSIONS,
+        "matryoshka": False,
+        "features": ["retrieval"],
+    },
+    {
+        "id": "bge-reranker-v2-m3",
+        "accelerator": "l40s",
+        "task": "rerank",
+        "tier": "medium",
+        "owned_by": "baai",
+        "context_window": 8192,
+        "max_documents": 256,
+        "features": ["rerank", "multilingual"],
+    },
+    {
+        "id": "jina-reranker-v2-base-multilingual",
+        "accelerator": "l40s",
+        "task": "rerank",
+        "tier": "small",
+        "owned_by": "jina-ai",
+        "context_window": 8192,
+        "max_documents": 128,
+        "features": ["rerank", "multilingual"],
+    },
+    {
+        "id": "mock-reranker",
+        "accelerator": "cpu",
+        "task": "rerank",
+        "tier": "fixture",
+        "owned_by": "kserve-mock",
+        "context_window": 2048,
+        "max_documents": 64,
+        "features": ["rerank"],
+    },
+    {
+        "id": "whisper-large-v3",
+        "accelerator": "l40s",
+        "task": "transcription",
+        "tier": "big",
+        "owned_by": "openai",
+        "features": ["asr", "diarization", "timestamps", "translation"],
+        "max_speakers": 8,
+    },
+    {
+        "id": "voxtral-small-24b",
+        "accelerator": "h100",
+        "task": "transcription",
+        "tier": "big",
+        "owned_by": "mistral-ai",
+        "features": ["asr", "diarization", "timestamps", "audio-understanding"],
+        "max_speakers": 8,
+    },
+    {
+        "id": "voxtral-mini-3b",
+        "accelerator": "l40s",
+        "task": "transcription",
+        "tier": "small",
+        "owned_by": "mistral-ai",
+        "features": ["asr", "timestamps"],
+        "max_speakers": 1,
+    },
+    {
+        "id": "mock-whisper",
+        "accelerator": "cpu",
+        "task": "transcription",
+        "tier": "fixture",
+        "owned_by": "kserve-mock",
+        "features": ["asr", "diarization", "timestamps"],
+        "max_speakers": 4,
+    },
+]
+
+MODELS = {entry["id"]: entry for entry in CATALOG}
+
+# A MODEL_NAME that is not in the catalog still has to serve chat, because the
+# LLMInferenceService names the served model.
+if MODEL not in MODELS:
+    MODELS[MODEL] = {
+        "id": MODEL,
+        "accelerator": ACCELERATOR or "cpu",
+        "task": "chat",
+        "tier": "fixture",
+        "owned_by": "kserve-mock",
+        "context_window": 8192,
+        "max_output_tokens": 1024,
+        "features": ["chat", "streaming"],
+    }
+
+# Models this replica serves. A pod in an accelerator pool answers only for the
+# models its cards are sized for; anything else belongs to another pool.
+SERVED = {
+    model_id: entry
+    for model_id, entry in MODELS.items()
+    if not ACCELERATOR or entry["accelerator"] == ACCELERATOR
+}
+
+
+def default_model(task, preferred):
+    """Return the model used when a request omits one, if this pool serves it."""
+    if preferred in SERVED and SERVED[preferred]["task"] == task:
+        return preferred
+    for model_id, entry in SERVED.items():
+        if entry["task"] == task:
+            return model_id
+    return None
+
+
+DEFAULT_MODEL = {
+    "chat": default_model("chat", MODEL),
+    "embedding": default_model("embedding", "mock-embedding"),
+    "rerank": default_model("rerank", "mock-reranker"),
+    "transcription": default_model("transcription", "mock-whisper"),
+}
+
+# Completion length reported per tier, so a client can tell the tiers apart.
+TIER_COMPLETION_TOKENS = {"big": 48, "medium": 24, "small": 12, "fixture": 5}
+
+TRUE_VALUES = ("1", "true", "yes", "on")
+
+TRANSCRIPT_LINES = [
+    "the gateway routed this request to the inference pool",
+    "the endpoint picker selected one of the model replicas",
+    "speech to text runs on the same multi task runtime",
+    "diarization labels each speaker turn in the audio",
+    "every response in this fixture is deterministic",
+    "reranking and embeddings share the model catalog",
+]
 
 
 def token_count(value):
     return len(re.findall(r"\w+", value, re.UNICODE))
 
 
-def deterministic_embedding(value):
+def digest_int(*parts):
+    """Return a stable integer derived from the given parts."""
+    seed = "|".join(str(part) for part in parts).encode()
+    return int.from_bytes(hashlib.sha256(seed).digest()[:8], "big")
+
+
+def deterministic_embedding(value, dimensions=EMBEDDING_DIMENSIONS):
     """Return a stable normalized vector without a model dependency."""
-    digest = hashlib.sha256(value.encode()).digest()
-    vector = []
-    for offset in range(0, EMBEDDING_DIMENSIONS * 2, 2):
-        integer = int.from_bytes(digest[offset : offset + 2], "big")
-        vector.append((integer / 32767.5) - 1.0)
-    norm = math.sqrt(sum(component * component for component in vector)) or 1.0
-    return [round(component / norm, 6) for component in vector]
+    components = []
+    block = 0
+    while len(components) < dimensions:
+        digest = hashlib.sha256(f"{block}:{value}".encode()).digest()
+        for offset in range(0, len(digest), 2):
+            integer = int.from_bytes(digest[offset : offset + 2], "big")
+            components.append((integer / 32767.5) - 1.0)
+        block += 1
+    components = components[:dimensions]
+    norm = math.sqrt(sum(component * component for component in components)) or 1.0
+    return [round(component / norm, 6) for component in components]
 
 
 def rerank_score(query, document):
@@ -35,6 +304,27 @@ def rerank_score(query, document):
     if not query_terms:
         return 0.0
     return round(len(query_terms & document_terms) / len(query_terms), 6)
+
+
+def model_card(entry):
+    """Return an OpenAI-compatible model object with the mock metadata."""
+    card = {
+        "id": entry["id"],
+        "object": "model",
+        "created": CREATED,
+        "owned_by": entry["owned_by"],
+        "task": entry["task"],
+        "tier": entry["tier"],
+        "accelerator": entry["accelerator"],
+        "features": entry["features"],
+        "mock": True,
+    }
+    extras = ("context_window", "max_output_tokens", "dimensions",
+              "max_documents", "max_speakers")
+    for key in extras:
+        if key in entry:
+            card[key] = entry[key]
+    return card
 
 
 def parse_multipart(content_type, body):
@@ -70,11 +360,66 @@ def parse_multipart(content_type, body):
     return fields, files
 
 
+def diarized_segments(seed, duration, speaker_count):
+    """Split a mock transcript into deterministic speaker turns.
+
+    Every pinned speaker has to get a turn, so a large num_speakers raises the
+    segment count rather than leaving speakers out of the transcript.
+    """
+    segment_count = max(2 + digest_int(seed, "segments") % 4, speaker_count)
+    span = round(duration / segment_count, 3)
+    segments = []
+    for index in range(segment_count):
+        line = TRANSCRIPT_LINES[digest_int(seed, "line", index) % len(TRANSCRIPT_LINES)]
+        start = round(index * span, 3)
+        segments.append(
+            {
+                "id": index,
+                "start": start,
+                "end": round(start + span, 3),
+                "text": line,
+                "speaker": "SPEAKER_%02d" % (index % speaker_count),
+                "no_speech_prob": round(digest_int(seed, "quiet", index) % 500 / 1e4, 4),
+            }
+        )
+    return segments
+
+
+def speaker_summary(segments):
+    speakers = {}
+    for segment in segments:
+        entry = speakers.setdefault(
+            segment["speaker"],
+            {"id": segment["speaker"], "segments": 0, "speech_seconds": 0.0},
+        )
+        entry["segments"] += 1
+        entry["speech_seconds"] += segment["end"] - segment["start"]
+    for entry in speakers.values():
+        entry["speech_seconds"] = round(entry["speech_seconds"], 3)
+    return sorted(speakers.values(), key=lambda entry: entry["id"])
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
         print(f"[{UPSTREAM}] {fmt % args}", flush=True)
+
+    def send_response(self, *args, **kwargs):
+        self.response_started = True
+        BaseHTTPRequestHandler.send_response(self, *args, **kwargs)
+
+    def dispatch(self, handler):
+        """Run a handler, answering with an error instead of a dropped socket."""
+        self.response_started = False
+        try:
+            handler()
+        except Exception as error:  # noqa: BLE001 - the fixture must still answer
+            self.log_message("handler failed: %r", error)
+            if not self.response_started:
+                self.send_error_payload(
+                    500, f"mock runtime error: {error}", "internal_error"
+                )
 
     def send_json(self, status, payload):
         body = json.dumps(payload).encode()
@@ -84,11 +429,52 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_error_payload(self, status, message, error_type, code=None):
+        error = {"message": message, "type": error_type}
+        if code:
+            error["code"] = code
+        self.send_json(status, {"error": error})
+
     def send_request_error(self, message):
-        self.send_json(
-            400,
-            {"error": {"message": message, "type": "invalid_request_error"}},
-        )
+        self.send_error_payload(400, message, "invalid_request_error")
+
+    def resolve_model(self, name, task):
+        """Return the catalog entry for name, or None after sending an error."""
+        if name is None:
+            name = DEFAULT_MODEL[task]
+            if name is None:
+                self.send_request_error(
+                    f"this {ACCELERATOR} pool serves no {task} models; "
+                    "name a model from GET /v1/models"
+                )
+                return None
+        if not isinstance(name, str):
+            self.send_request_error("model must be a string")
+            return None
+        entry = MODELS.get(name)
+        if entry is None:
+            self.send_error_payload(
+                404,
+                f"model '{name}' is not in this mock catalog; see GET /v1/models",
+                "invalid_request_error",
+                "model_not_found",
+            )
+            return None
+        if name not in SERVED:
+            self.send_error_payload(
+                404,
+                f"model '{name}' runs on {entry['accelerator']} and is not served "
+                f"by this {ACCELERATOR} pool",
+                "invalid_request_error",
+                "model_not_served_here",
+            )
+            return None
+        if entry["task"] != task:
+            self.send_request_error(
+                f"model '{name}' serves the {entry['task']} task, not {task}"
+            )
+            return None
+        return entry
 
     def read_body(self):
         if self.headers.get("transfer-encoding", "").lower() == "chunked":
@@ -117,18 +503,57 @@ class Handler(BaseHTTPRequestHandler):
         return payload
 
     def do_GET(self):
-        path = self.path.split("?", 1)[0]
+        path, _, query = self.path.partition("?")
         if path == "/health":
             self.send_json(
                 200,
                 {
                     "status": "ok",
                     "pod": UPSTREAM,
-                    "capabilities": ["chat", "embeddings", "rerank", "stt"],
+                    "capabilities": ["chat", "embeddings", "rerank", "stt", "models"],
+                    "accelerator": ACCELERATOR or "all",
+                    "models": len(SERVED),
                 },
             )
+        elif path == "/v1/models":
+            self.dispatch(lambda: self.handle_model_list(query))
+        elif path.startswith("/v1/models/"):
+            self.dispatch(lambda: self.handle_model_read(path[len("/v1/models/") :]))
         else:
             self.send_json(404, {"error": "not found"})
+
+    def handle_model_list(self, query):
+        filters = {}
+        for pair in query.split("&"):
+            key, _, value = pair.partition("=")
+            if key in ("task", "tier", "accelerator") and value:
+                filters[key] = value
+        cards = [
+            model_card(entry)
+            for entry in SERVED.values()
+            if all(entry.get(key) == value for key, value in filters.items())
+        ]
+        self.send_json(
+            200,
+            {
+                "object": "list",
+                "data": sorted(cards, key=lambda card: (card["task"], card["id"])),
+                "mock_pod": UPSTREAM,
+                "mock_accelerator": ACCELERATOR or "all",
+            },
+        )
+
+    def handle_model_read(self, model_id):
+        entry = SERVED.get(model_id)
+        if entry is None:
+            self.send_error_payload(
+                404,
+                f"model '{model_id}' does not exist in this mock catalog",
+                "invalid_request_error",
+                "model_not_found",
+            )
+            return
+        self.send_json(200, model_card(entry))
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
@@ -142,15 +567,58 @@ class Handler(BaseHTTPRequestHandler):
         if not handler:
             self.send_json(404, {"error": "not found"})
             return
-        handler()
+        self.dispatch(handler)
 
     def handle_chat(self):
         request = self.read_json()
         if request is None:
             return
-        model = request.get("model", MODEL)
-        text = f"Hello from {UPSTREAM} ({model})"
-        usage = {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+        entry = self.resolve_model(request.get("model"), "chat")
+        if entry is None:
+            return
+        model = entry["id"]
+        messages = request.get("messages", [])
+        if not isinstance(messages, list):
+            self.send_request_error("messages must be an array")
+            return
+        max_tokens = request.get("max_tokens", request.get("max_completion_tokens"))
+        if max_tokens is not None:
+            if not isinstance(max_tokens, int) or max_tokens <= 0:
+                self.send_request_error("max_tokens must be a positive integer")
+                return
+            if max_tokens > entry["max_output_tokens"]:
+                self.send_error_payload(
+                    400,
+                    f"max_tokens {max_tokens} exceeds the {entry['max_output_tokens']} "
+                    f"token output limit of '{model}'",
+                    "invalid_request_error",
+                    "context_length_exceeded",
+                )
+                return
+
+        prompt = " ".join(
+            message.get("content", "")
+            for message in messages
+            if isinstance(message, dict) and isinstance(message.get("content"), str)
+        )
+        text = (
+            f"Hello from {UPSTREAM} ({model}) - {entry['tier']} tier, "
+            f"{entry['context_window']} token context"
+        )
+        prompt_tokens = max(token_count(prompt), 1)
+        completion_tokens = TIER_COMPLETION_TOKENS[entry["tier"]]
+        finish_reason = "stop"
+        # A caller that asks for fewer tokens than the tier emits gets a
+        # generation that stops at its limit, like a real runtime.
+        if max_tokens is not None and max_tokens < completion_tokens:
+            completion_tokens = max_tokens
+            text = " ".join(text.split()[:max_tokens])
+            finish_reason = "length"
+        usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
 
         if request.get("stream"):
             self.send_response(200)
@@ -163,7 +631,13 @@ class Handler(BaseHTTPRequestHandler):
                     "id": "chatcmpl-kserve",
                     "object": "chat.completion.chunk",
                     "model": model,
-                    "choices": [{"index": 0, "delta": {"content": text}}],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": text},
+                            "finish_reason": finish_reason,
+                        }
+                    ],
                 },
                 {
                     "id": "chatcmpl-kserve",
@@ -190,10 +664,13 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "index": 0,
                         "message": {"role": "assistant", "content": text},
-                        "finish_reason": "stop",
+                        "finish_reason": finish_reason,
                     }
                 ],
                 "usage": usage,
+                "mock_pod": UPSTREAM,
+                "mock_tier": entry["tier"],
+                "mock_accelerator": entry["accelerator"],
             },
         )
 
@@ -211,7 +688,26 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_request_error("input must be a string or an array of strings")
             return
-        model = request.get("model", "mock-embedding")
+        entry = self.resolve_model(request.get("model"), "embedding")
+        if entry is None:
+            return
+        dimensions = request.get("dimensions", entry["dimensions"])
+        if not isinstance(dimensions, int) or dimensions <= 0:
+            self.send_request_error("dimensions must be a positive integer")
+            return
+        if dimensions != entry["dimensions"]:
+            if not entry["matryoshka"]:
+                self.send_request_error(
+                    f"model '{entry['id']}' only returns "
+                    f"{entry['dimensions']}-dimensional vectors"
+                )
+                return
+            if dimensions > entry["dimensions"]:
+                self.send_request_error(
+                    f"dimensions must not exceed {entry['dimensions']} "
+                    f"for '{entry['id']}'"
+                )
+                return
         tokens = sum(token_count(item) for item in inputs)
         self.send_json(
             200,
@@ -220,14 +716,16 @@ class Handler(BaseHTTPRequestHandler):
                 "data": [
                     {
                         "object": "embedding",
-                        "embedding": deterministic_embedding(item),
+                        "embedding": deterministic_embedding(item, dimensions),
                         "index": index,
                     }
                     for index, item in enumerate(inputs)
                 ],
-                "model": model,
+                "model": entry["id"],
                 "usage": {"prompt_tokens": tokens, "total_tokens": tokens},
                 "mock_pod": UPSTREAM,
+                "mock_accelerator": entry["accelerator"],
+                "mock_dimensions": dimensions,
             },
         )
 
@@ -249,6 +747,15 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_request_error("each document must be a string or text object")
                 return
+        entry = self.resolve_model(request.get("model"), "rerank")
+        if entry is None:
+            return
+        if len(documents) > entry["max_documents"]:
+            self.send_request_error(
+                f"model '{entry['id']}' accepts at most "
+                f"{entry['max_documents']} documents"
+            )
+            return
         top_n = request.get("top_n", len(documents))
         if not isinstance(top_n, int) or top_n < 0:
             self.send_request_error("top_n must be a non-negative integer")
@@ -271,10 +778,11 @@ class Handler(BaseHTTPRequestHandler):
             200,
             {
                 "id": "rerank-kserve",
-                "model": request.get("model", "mock-reranker"),
+                "model": entry["id"],
                 "results": ranked,
                 "usage": {"search_units": 1},
                 "mock_pod": UPSTREAM,
+                "mock_accelerator": entry["accelerator"],
             },
         )
 
@@ -292,19 +800,80 @@ class Handler(BaseHTTPRequestHandler):
         if audio is None:
             self.send_request_error("file is required")
             return
+        entry = self.resolve_model(fields.get("model"), "transcription")
+        if entry is None:
+            return
         filename = audio["filename"] or "audio"
         size = len(audio["content"])
-        model = fields.get("model", "mock-whisper")
-        self.send_json(
-            200,
-            {
-                "text": f"Mock transcription of {filename} ({size} bytes) from {UPSTREAM}",
-                "model": model,
-                "language": fields.get("language", "en"),
-                "duration": round(size / 16000, 3),
-                "mock_pod": UPSTREAM,
-            },
+        response_format = fields.get("response_format", "json")
+        if response_format not in ("json", "verbose_json", "text"):
+            self.send_request_error(
+                "response_format must be json, verbose_json, or text"
+            )
+            return
+
+        diarize = fields.get("diarization", "false").strip().lower() in TRUE_VALUES
+        if diarize and "diarization" not in entry["features"]:
+            self.send_request_error(
+                f"model '{entry['id']}' performs ASR only, without diarization"
+            )
+            return
+        speaker_count = 1
+        if diarize:
+            requested = fields.get("num_speakers")
+            if requested is not None:
+                if not requested.isdigit() or int(requested) < 1:
+                    self.send_request_error("num_speakers must be a positive integer")
+                    return
+                speaker_count = int(requested)
+                if speaker_count > entry["max_speakers"]:
+                    self.send_request_error(
+                        f"model '{entry['id']}' diarizes at most "
+                        f"{entry['max_speakers']} speakers"
+                    )
+                    return
+            else:
+                speaker_count = min(
+                    2 + digest_int(filename, size, "speakers") % 2,
+                    entry["max_speakers"],
+                )
+
+        seed = f"{filename}:{size}"
+        segments = diarized_segments(seed, max(size / 16000, 3.0), speaker_count)
+        duration = round(segments[-1]["end"], 3)
+        transcript = ", ".join(segment["text"] for segment in segments)
+        text = (
+            f"Mock transcription of {filename} ({size} bytes) "
+            f"from {UPSTREAM}: {transcript}"
         )
+
+        if response_format == "text":
+            body = text.encode()
+            self.send_response(200)
+            self.send_header("content-type", "text/plain; charset=utf-8")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        payload = {
+            "text": text,
+            "model": entry["id"],
+            "language": fields.get("language", "en"),
+            "duration": duration,
+            "mock_pod": UPSTREAM,
+            "mock_accelerator": entry["accelerator"],
+        }
+        if response_format == "verbose_json" or diarize:
+            if not diarize:
+                for segment in segments:
+                    segment.pop("speaker")
+            payload["task"] = "transcribe"
+            payload["segments"] = segments
+        if diarize:
+            payload["speakers"] = speaker_summary(segments)
+            payload["diarization"] = True
+        self.send_json(200, payload)
 
 
 if __name__ == "__main__":
