@@ -94,9 +94,12 @@ helm --kube-context "$ENVOY_CTX" upgrade -i eg \
 kubectl --context "$ENVOY_CTX" -n envoy-gateway-system rollout status \
   deployment/envoy-gateway --timeout=5m
 
-echo "==> Envoy AI Gateway SecurityPolicy, AIGatewayRoute, and BackendTrafficPolicy"
-kubectl --context "$ENVOY_CTX" apply -f "$ROOT/envoy-ai-gateway/policies/security-policy.yaml"
+echo "==> Envoy AI Gateway AIGatewayRoute, SecurityPolicy, and BackendTrafficPolicy"
+# The AIGatewayRoute first: the SecurityPolicy protects the HTTPRoute the AI
+# Gateway controller generates from it, so that route has to exist to be
+# referenced.
 kubectl --context "$ENVOY_CTX" apply -f "$ROOT/envoy-ai-gateway/policies/ai-route.yaml"
+kubectl --context "$ENVOY_CTX" apply -f "$ROOT/envoy-ai-gateway/policies/security-policy.yaml"
 kubectl --context "$ENVOY_CTX" apply -f "$ROOT/envoy-ai-gateway/policies/rate-limit.yaml"
 wait_condition "$ENVOY_CTX" securitypolicy/kserve-mock Accepted
 wait_condition "$ENVOY_CTX" backendtrafficpolicy/kserve-mock Accepted

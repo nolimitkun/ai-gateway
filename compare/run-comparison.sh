@@ -16,8 +16,10 @@ AG_BASE=http://localhost:8081
 BODY='{"model":"mock-kserve","messages":[{"role":"user","content":"hello through KServe"}]}'
 BIG_BODY='{"model":"kimi-k3","messages":[{"role":"user","content":"hello through KServe"}]}'
 STREAM='{"model":"mock-kserve","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hello through KServe"}]}'
-# Every run gets its own quota bucket, so a second run on the same day still
-# measures enforcement rather than an already-spent daily quota.
+# Kuadrant and Envoy Gateway key the quota bucket on this value, so a second
+# run on the same day still measures enforcement rather than an already-spent
+# daily quota. agentgateway's local limits have no keyed descriptor, so its
+# bucket is shared by every run inside the window.
 RUN_ID="probe-$(date +%s)"
 
 condition_status() {
@@ -57,6 +59,21 @@ except Exception:
     print("no")' "$condition"
 }
 
+# Presence, not readiness: the feature probes must run whenever the policies
+# were deployed, so that a policy the controller rejected shows up as failed
+# enforcement rather than as an absent feature layer.
+policies_present() {
+  local context="$1" object
+  shift
+  for object in "$@"; do
+    if kubectl --context "$context" -n ai-demo get "$object" >/dev/null 2>&1; then
+      echo yes
+      return
+    fi
+  done
+  echo no
+}
+
 policies_accepted() {
   local context="$1" condition="$2" ready=0 total=0 object
   shift 2
@@ -72,10 +89,11 @@ policies_accepted() {
 
 fetch_token() {
   local base="$1" user="$2" password="$3"
-  curl -sS -m 20 "$base/realms/ai-gateway/protocol/openid-connect/token" \
+  # An unreachable gateway must leave the token empty, not abort the run.
+  { curl -sS -m 20 "$base/realms/ai-gateway/protocol/openid-connect/token" \
     -H 'content-type: application/x-www-form-urlencoded' \
     -d grant_type=password -d client_id=ai-gateway-cli \
-    -d "username=$user" -d "password=$password" 2>/dev/null | python3 -c '
+    -d "username=$user" -d "password=$password" 2>/dev/null || true; } | python3 -c '
 import json, sys
 try:
     print(json.load(sys.stdin).get("access_token", ""))
@@ -86,6 +104,29 @@ except Exception:
 KU_TOKEN=""
 EA_TOKEN=""
 AG_TOKEN=""
+KU_FEATURES=no
+EA_FEATURES=no
+AG_FEATURES=no
+
+features_for() {
+  case "$1" in
+    "$KU_BASE") printf '%s' "$KU_FEATURES" ;;
+    "$EA_BASE") printf '%s' "$EA_FEATURES" ;;
+    "$AG_BASE") printf '%s' "$AG_FEATURES" ;;
+  esac
+}
+
+# Keycloak on its own is not the feature layer: `make keycloak` installs the
+# realm without any policy, and tokens would then be accepted everywhere.
+# Probes report what is missing instead of reporting an open path as enforced.
+feature_guard() {
+  local base="$1"
+  if [[ "$(features_for "$base")" != yes ]]; then
+    echo "no policy"
+  elif [[ -z "$(token_for "$base")" ]]; then
+    echo "token error"
+  fi
+}
 
 token_for() {
   case "$1" in
@@ -267,14 +308,18 @@ except Exception:
 # --- gateway feature probes -------------------------------------------------
 
 token_issuance() {
-  [[ -n "$(token_for "$1")" ]] && echo yes || echo "no policy"
+  [[ -n "$(token_for "$1")" ]] && echo yes || echo no
 }
 
 # Anonymous, forged, and valid credentials against the same endpoint.
 authentication_probe() {
-  local base="$1" token anonymous forged valid
+  local base="$1" token anonymous forged valid guard
+  guard="$(feature_guard "$base")"
+  if [[ -n "$guard" ]]; then
+    echo "$guard"
+    return
+  fi
   token="$(token_for "$base")"
-  [[ -n "$token" ]] || { echo "no policy"; return; }
   anonymous=$(curl -sS -o /dev/null -w '%{http_code}' -m 25 "$base/v1/chat/completions" \
     -H 'content-type: application/json' -d "$BODY" || true)
   forged=$(curl -sS -o /dev/null -w '%{http_code}' -m 25 "$base/v1/chat/completions" \
@@ -289,8 +334,12 @@ authentication_probe() {
 # mallory is only in `guests`; bob is in `model-users` but not
 # `platform-admins`, so only alice may reach the B300 class.
 authorization_probe() {
-  local base="$1" guest member admin outsider restricted allowed
-  [[ -n "$(token_for "$base")" ]] || { echo "no policy"; return; }
+  local base="$1" guest member admin outsider restricted allowed guard
+  guard="$(feature_guard "$base")"
+  if [[ -n "$guard" ]]; then
+    echo "$guard"
+    return
+  fi
   guest="$(fetch_token "$base" mallory mallory)"
   member="$(fetch_token "$base" bob bob)"
   admin="$(token_for "$base")"
@@ -310,8 +359,12 @@ authorization_probe() {
 # Sends up to `tries` requests carrying an opt-in probe header and reports
 # where the limit closed. The header keeps ordinary traffic out of the budget.
 limit_probe() {
-  local base="$1" header="$2" tries="$3" body="${4:-$BODY}" code index
-  [[ -n "$(token_for "$base")" ]] || { echo "no policy"; return; }
+  local base="$1" header="$2" tries="$3" body="${4:-$BODY}" code index guard
+  guard="$(feature_guard "$base")"
+  if [[ -n "$guard" ]]; then
+    echo "$guard"
+    return
+  fi
   for index in $(seq 1 "$tries"); do
     code=$(status_code "$base" "$base/v1/chat/completions" -H "$header" \
       -H 'content-type: application/json' -d "$body" || true)
@@ -327,13 +380,18 @@ limit_probe() {
 # AIGatewayRoute, which this repository pins to the ai.local hostname; the
 # other two stacks read usage on the shared route.
 token_limit_probe() {
-  local base="$1" code index token
-  token="$(token_for "$base")"
-  [[ -n "$token" ]] || { echo "no policy"; return; }
+  local base="$1" code index guard
+  guard="$(feature_guard "$base")"
+  if [[ -n "$guard" ]]; then
+    echo "$guard"
+    return
+  fi
   for index in $(seq 1 6); do
     if [[ "$base" == "$EA_BASE" ]]; then
-      code=$(curl -sS -o /dev/null -w '%{http_code}' -m 25 "$base/v1/chat/completions" \
-        -H 'host: ai.local' -H 'x-user-id: alice' \
+      # The AI route is JWT-protected like the plain one, and the bucket key
+      # comes from the verified claim rather than from a client header.
+      code=$(status_code "$base" "$base/v1/chat/completions" \
+        -H 'host: ai.local' \
         -H 'content-type: application/json' -d "$BIG_BODY" || true)
     else
       code=$(status_code "$base" "$base/v1/chat/completions" \
@@ -346,6 +404,17 @@ token_limit_probe() {
     fi
   done
   echo "no 429 in 6"
+}
+
+# agentgateway counts local limits inside the proxy with no keyed descriptor,
+# so RUN_ID cannot give it a fresh bucket the way it does for the other two.
+quota_probe() {
+  local base="$1" result
+  result="$(limit_probe "$base" "x-quota-probe: $RUN_ID" 6)"
+  if [[ "$base" == "$AG_BASE" && "$result" == 429* ]]; then
+    result="$result, bucket shared across runs"
+  fi
+  echo "$result"
 }
 
 cors_probe() {
@@ -381,10 +450,19 @@ echo "collecting KServe comparison ($N requests per gateway)..." >&2
 KU_TOKEN=$(fetch_token "$KU_BASE" alice alice)
 EA_TOKEN=$(fetch_token "$EA_BASE" alice alice)
 AG_TOKEN=$(fetch_token "$AG_BASE" alice alice)
-if [[ -n "$KU_TOKEN$EA_TOKEN$AG_TOKEN" ]]; then
-  echo "Keycloak reachable; running the gateway feature probes too" >&2
+# Only the objects `make policies` adds count as the feature layer; the
+# RateLimitPolicy `make up` installs would otherwise make the Kuadrant column
+# look protected when it is not.
+KU_FEATURES=$(policies_present kind-ai-gw-kuadrant \
+  authpolicy/kserve-mock tokenratelimitpolicy/kserve-mock)
+EA_FEATURES=$(policies_present kind-ai-gw-envoy \
+  securitypolicy/kserve-mock backendtrafficpolicy/kserve-mock)
+AG_FEATURES=$(policies_present kind-ai-gw-agent \
+  agentgatewaypolicy/kserve-mock-jwt agentgatewaypolicy/kserve-mock-rate-limit)
+if [[ "$KU_FEATURES$EA_FEATURES$AG_FEATURES" == *yes* ]]; then
+  echo "gateway policies deployed; running the feature probes too" >&2
 else
-  echo "no Keycloak realm behind any gateway; run 'make policies' for the feature probes" >&2
+  echo "no gateway policies found; run 'make policies' for the feature probes" >&2
 fi
 
 ku_samples=$(samples "$KU_BASE")
@@ -453,7 +531,7 @@ returned HTTP 429.
 | authentication: anonymous / forged / valid | $(authentication_probe "$KU_BASE") | $(authentication_probe "$EA_BASE") | $(authentication_probe "$AG_BASE") |
 | authorization: guest / non-admin B300 / admin B300 | $(authorization_probe "$KU_BASE") | $(authorization_probe "$EA_BASE") | $(authorization_probe "$AG_BASE") |
 | request rate limit (5 per minute) | $(limit_probe "$KU_BASE" 'x-rate-limit-probe: true' 8) | $(limit_probe "$EA_BASE" 'x-rate-limit-probe: true' 8) | $(limit_probe "$AG_BASE" 'x-rate-limit-probe: true' 8) |
-| quota limit (3 per window) | $(limit_probe "$KU_BASE" "x-quota-probe: $RUN_ID" 6) | $(limit_probe "$EA_BASE" "x-quota-probe: $RUN_ID" 6) | $(limit_probe "$AG_BASE" "x-quota-probe: $RUN_ID" 6) |
+| quota limit (3 per window) | $(quota_probe "$KU_BASE") | $(quota_probe "$EA_BASE") | $(quota_probe "$AG_BASE") |
 | token limit (100 tokens per minute) | $(token_limit_probe "$KU_BASE") | $(token_limit_probe "$EA_BASE") | $(token_limit_probe "$AG_BASE") |
 | CORS preflight answered | $(cors_probe "$KU_BASE") | $(cors_probe "$EA_BASE") | $(cors_probe "$AG_BASE") |
 

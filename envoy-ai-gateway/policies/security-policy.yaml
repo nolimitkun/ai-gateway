@@ -1,7 +1,12 @@
-# Envoy Gateway authentication and authorization for the KServe route.
+# Envoy Gateway authentication and authorization for the KServe routes.
 #
-# The policy targets the route rather than the Gateway so that Keycloak's own
+# The policy targets the routes rather than the Gateway so that Keycloak's own
 # /realms endpoints, which share the Gateway, stay reachable without a token.
+# Both inference routes are listed: kserve-mock is this repository's own
+# HTTPRoute, and kserve-mock-ai is the one the AI Gateway controller generates
+# for the AIGatewayRoute, under the same name and namespace. Without the
+# second reference the ai.local hostname would reach the InferencePool with no
+# token at all.
 #
 # claimToHeaders turns the verified identity into request headers, which is
 # how the rate limit and quota buckets below get a per-user key: Envoy's rate
@@ -16,6 +21,9 @@ spec:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
       name: kserve-mock
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock-ai
   jwt:
     providers:
       - name: keycloak

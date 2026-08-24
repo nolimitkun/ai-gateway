@@ -318,7 +318,14 @@ The rate limit, quota, and token budgets are selected by opt-in request
 headers (`x-rate-limit-probe`, `x-quota-probe`, `x-token-limit-probe`).
 Ordinary traffic keeps the wide limits, so one comparison run can exhaust a
 budget and measure enforcement without spending the quota that the latency
-sample shares.
+sample shares. Kuadrant and Envoy Gateway additionally key the quota bucket on
+the probe header's value, so each run starts from a fresh daily quota;
+agentgateway's local counters take no key, so its quota bucket is shared by
+every run inside the window and the comparison labels that column accordingly.
+
+The probes run when the policy objects are present, not merely when Keycloak
+answers — `make keycloak` on its own would otherwise make an open path look
+enforced.
 
 ### The same job in three APIs
 
@@ -352,16 +359,19 @@ costs to run rather than what it can express:
   agentgateway counts local limits inside the proxy with no dependency at all,
   at the cost of the budget being per proxy instance.
 - **How long a window can be.** A daily quota is one field for Kuadrant and
-  Envoy Gateway. agentgateway's local limits stop at hours, so a real daily
-  quota there needs the global rate limit service; the comparison configures
-  an hourly window for that column and reports what it measured.
+  Envoy Gateway. agentgateway's local limits stop at hours and take no
+  descriptor, so both a longer window and a per-identity bucket need the
+  global rate limit service; the comparison configures an hourly window for
+  that column and reports what it measured.
 - **Where token counts come from.** Kuadrant parses `usage.total_tokens` out
   of the OpenAI-compatible response on the ordinary route. agentgateway takes
   a `unit: Tokens` descriptor. Envoy AI Gateway extracts token counts in its
   ext_proc, which only runs for traffic on an `AIGatewayRoute` — so this
   repository adds one, pinned to the `ai.local` hostname, alongside the plain
   `HTTPRoute` that carries everything else. Both end at the same
-  `InferencePool`.
+  `InferencePool`, and the `SecurityPolicy` targets both: the AI Gateway
+  controller generates its `HTTPRoute` under the AIGatewayRoute's own name, so
+  the second target keeps `ai.local` from being an unauthenticated way in.
 
 Both policy sets attach to the same `HTTPRoute/kserve-mock` the routing
 comparison already uses, so the feature layer measures the gateways rather
