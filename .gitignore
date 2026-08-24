@@ -1,3 +1,5 @@
 # helm chart tarballs are intentionally vendored -- do not ignore them
 .DS_Store
 *.log
+__pycache__/
+*.py[cod]

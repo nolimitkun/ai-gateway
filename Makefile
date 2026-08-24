@@ -6,7 +6,7 @@ ENVOY_CLUSTER := ai-gw-envoy
 AGENT_CLUSTER := ai-gw-agent
 CLUSTERS := $(KUADRANT_CLUSTER) $(ENVOY_CLUSTER) $(AGENT_CLUSTER)
 
-.PHONY: help up down clusters install runtime gateways kserve compare status charts agent-ui
+.PHONY: help up down clusters install runtime gateways kserve compare status charts agent-ui test
 
 help: ## show targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-10s %s\n",$$1,$$2}'
@@ -46,6 +46,9 @@ kserve: ## deploy the same KServe LLMInferenceService into all three clusters
 
 compare: ## compare all gateways through the single KServe path
 	bash compare/run-comparison.sh
+
+test: ## test the multi-task mock runtime locally
+	python3 -m unittest discover -s mock-llm -p 'test_*.py' -v
 
 agent-ui: ## expose agentgateway UI at http://localhost:15000/ui
 	@POD="$$(kubectl --context kind-$(AGENT_CLUSTER) -n ai-demo get pod \

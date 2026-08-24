@@ -1,11 +1,12 @@
 # KServe fixture
 
-The same KServe 0.20.0 model and scheduler configuration is applied to the
-OpenShift-aligned Kuadrant, Envoy AI Gateway, and agentgateway clusters.
+The same KServe 0.20.0 model, multi-task mock runtime, and scheduler
+configuration is applied to the OpenShift-aligned Kuadrant, Envoy AI Gateway,
+and agentgateway clusters.
 
 ## Files
 
-- `manifests/llmisvc.yaml` defines two CPU model replicas and the scheduler.
+- `manifests/llmisvc.yaml` defines two CPU runtime replicas and the scheduler.
 - `manifests/route.yaml` is the only inference route in the repository.
 - `manifests/cpu-presets.yaml` prevents KServe's GPU/vLLM presets from being
   merged into this complete laptop fixture.
@@ -38,17 +39,29 @@ The data path is:
 Gateway -> HTTPRoute -> InferencePool -> EPP -> selected model pod
 ```
 
+The single `HTTPRoute` matches `/v1`, which integrates all mock capabilities
+with every gateway without provider-specific paths:
+
+| Endpoint | Compatibility shape |
+|---|---|
+| `/v1/chat/completions` | OpenAI chat and server-sent event streaming |
+| `/v1/embeddings` | OpenAI embeddings response list |
+| `/v1/rerank` | common query/documents reranking schema |
+| `/v1/audio/transcriptions` | OpenAI multipart transcription upload |
+
 ## Why a mock runtime
 
 This repository validates KServe ownership, readiness, scheduling, Gateway API
-integration, pod selection, and streaming on a CPU laptop. Storage
-initialization is disabled and `mock-llm/server.py` is mounted into the
-KServe-owned pods.
+integration, pod selection, streaming, embeddings, reranking, and multipart
+audio uploads on a CPU laptop. Storage initialization is disabled and
+`mock-llm/server.py` is mounted into the KServe-owned pods.
 
-That runtime is not a model-server recommendation. For production, use a real
-model URI and KServe runtime config, enable storage initialization, allocate
-GPU resources, and select scheduler plugins that consume the model server's
-queue and KV-cache telemetry.
+That combined runtime is not a model-server recommendation. Production chat,
+embedding, reranking, and transcription models normally have different
+runtimes, scaling profiles, and accelerator requirements. Deploy task-specific
+backends and routes; for LLM workloads, use a real model URI and KServe runtime
+config, enable storage initialization, allocate GPU resources, and select
+scheduler plugins that consume queue and KV-cache telemetry.
 
 The required installation order is preserved by the scripts: Gateway API
 Inference Extension CRDs are installed before each gateway provider, followed
