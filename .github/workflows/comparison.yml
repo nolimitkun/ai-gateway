@@ -102,9 +102,9 @@ jobs:
           # Name the file this run writes by diffing the directory, so the
           # result committed to the repository can never be mistaken for it.
           before="$(mktemp)"; after="$(mktemp)"
-          find compare/results -name '*.md' | sort > "$before"
+          find compare/results -name '*.txt' | sort > "$before"
           make compare
-          find compare/results -name '*.md' | sort > "$after"
+          find compare/results -name '*.txt' | sort > "$after"
           result="$(comm -13 "$before" "$after" | tail -1)"
           test -n "$result" || { echo "the comparison wrote no result file" >&2; exit 1; }
           mkdir -p artifacts
