@@ -418,6 +418,25 @@ auto_p50() {
   samples "$base" "$AUTO_BODY" 10 | p50
 }
 
+# An attachment object exists before the proxy is using it, and these results
+# are written straight into README.md, so a probe that raced reconciliation
+# would commit "the router did not route" as a measurement. Wait for the data
+# plane to start rewriting -- the only propagation check that covers the
+# status-less EnvoyFilter too. A gateway that never starts still records the
+# honest negative once the window closes.
+wait_for_router() {
+  local base="$1" deadline=$((SECONDS + 90)) selected
+  [[ "$(router_for "$base")" == yes ]] || return 0
+  while ((SECONDS < deadline)); do
+    selected="$(auto_model "$base" 'hello there, good morning')"
+    if [[ "$selected" != none && "$selected" != error ]]; then
+      return 0
+    fi
+    sleep 3
+  done
+  echo "warning: $base did not route an 'auto' request within 90s" >&2
+}
+
 # The OpenShift profile attaches ext_proc as raw Envoy configuration, and an
 # EnvoyFilter carries no status at all, so that column reports presence where
 # the other two report what their controller accepted.
@@ -607,6 +626,9 @@ EA_ROUTER=$(policies_present kind-ai-gw-envoy envoyextensionpolicy/semantic-rout
 AG_ROUTER=$(policies_present kind-ai-gw-agent agentgatewaypolicy/kserve-mock-semantic-router)
 if [[ "$KU_ROUTER$EA_ROUTER$AG_ROUTER" == *yes* ]]; then
   echo "semantic router attached; running the auto-routing probes too" >&2
+  wait_for_router "$KU_BASE"
+  wait_for_router "$EA_BASE"
+  wait_for_router "$AG_BASE"
 else
   echo "no semantic router found; run 'make semantic-router' for the auto-routing probes" >&2
 fi

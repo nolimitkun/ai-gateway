@@ -369,6 +369,12 @@ image, `ghcr.io/vllm-project/semantic-router/extproc:v0.3.0`, deployed
 identically in all three clusters; only the attachment differs, and that is
 what this layer compares.
 
+An attachment object exists before the proxy is using it, so `make
+semantic-router` waits for each policy to report `Accepted`, and `make compare`
+waits for each gateway to actually rewrite an `auto` request before it measures
+anything — the only propagation check that covers the status-less `EnvoyFilter`
+as well. A gateway that never starts routing still records the negative.
+
 This layer's manifests and decisions pass the offline checks below, but the
 rows it adds have not yet been filled in by a live run. Run `make
 semantic-router && make compare`, or dispatch the comparison workflow, to

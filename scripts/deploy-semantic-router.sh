@@ -20,6 +20,33 @@ MANIFESTS="$ROOT/semantic-router/manifests"
 DELETE=false
 [[ "${1:-}" == "--delete" ]] && DELETE=true
 
+# An attachment that was applied is not yet an attachment the proxy is using.
+# Two of the three report a status; waiting on it also surfaces a policy the
+# controller rejected, which would otherwise look like a working router that
+# simply never routed anything.
+wait_condition() {
+  local ctx="$1" object="$2" condition="$3" deadline=$((SECONDS + 180))
+  while ((SECONDS < deadline)); do
+    if kubectl --context "$ctx" -n ai-demo get "$object" -o json 2>/dev/null |
+      python3 -c '
+import json, sys
+want = sys.argv[1]
+status = json.load(sys.stdin).get("status", {})
+conditions = list(status.get("conditions", []))
+for key in ("ancestors", "parents"):
+    for ancestor in status.get(key, []):
+        conditions.extend(ancestor.get("conditions", []))
+sys.exit(0 if any(c.get("type") == want and c.get("status") == "True"
+                  for c in conditions) else 1)' "$condition"; then
+      echo "$object $condition"
+      return 0
+    fi
+    sleep 3
+  done
+  echo "warning: $object did not report $condition in $ctx" >&2
+  return 0
+}
+
 attachment_for() {
   case "$1" in
     "$KUADRANT_CTX") echo "$MANIFESTS/kuadrant-extproc.yaml" ;;
@@ -56,6 +83,14 @@ for ctx in "$KUADRANT_CTX" "$ENVOY_CTX" "$AGENT_CTX"; do
 
   echo "==> ext_proc attachment in $ctx"
   kubectl --context "$ctx" apply -f "$(attachment_for "$ctx")"
+  case "$ctx" in
+    "$ENVOY_CTX") wait_condition "$ctx" envoyextensionpolicy/semantic-router Accepted ;;
+    "$AGENT_CTX") wait_condition "$ctx" agentgatewaypolicy/kserve-mock-semantic-router Accepted ;;
+    # An EnvoyFilter has no status to wait on. `make compare` waits for the
+    # data plane itself before it measures anything, which is the only check
+    # that covers this stack.
+    *) echo "EnvoyFilter applied; Istio reports no status for it" ;;
+  esac
 done
 
 cat <<'EOF'
