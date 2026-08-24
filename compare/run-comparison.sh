@@ -8,7 +8,7 @@
 # been run, so the routing comparison works on its own.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:-$ROOT/compare/results/comparison-$(date +%Y%m%d-%H%M%S).txt}"
+README="${1:-$ROOT/README.md}"
 N="${N:-30}"
 KU_BASE=http://localhost:8082
 EA_BASE=http://localhost:8080
@@ -488,88 +488,56 @@ ag_policies=$(policies_accepted kind-ai-gw-agent Accepted \
   agentgatewaypolicy/kserve-mock-big-tier agentgatewaypolicy/kserve-mock-rate-limit \
   agentgatewaypolicy/kserve-mock-cors)
 
-mkdir -p "$(dirname "$OUT")"
-cat > "$OUT" <<EOF
-# KServe gateway comparison — $(date -u '+%Y-%m-%d %H:%M UTC')
-
-All environments run KServe v0.20.0 with the same LLMInferenceService,
-two-replica multi-task CPU runtime, KServe-managed llm-d EPP, InferencePool,
-and HTTPRoute.
-Sample size: $N requests per gateway.
-
-## Inference path
-
-| Check | OpenShift profile (Kuadrant + Istio/Envoy) | Envoy AI Gateway | agentgateway |
-|---|---|---|---|
+timestamp="$(date -u '+%Y-%m-%d %H:%M')"
+comparison_rows="$(cat <<EOF
+| Last live comparison (UTC) | $timestamp ($N requests) | $timestamp ($N requests) | $timestamp ($N requests) |
 | Gateway Programmed | $ku_gateway | $ea_gateway | $ag_gateway |
-| LLMInferenceService Ready | $ku_llmisvc | $ea_llmisvc | $ag_llmisvc |
-| HTTPRoute Accepted / ResolvedRefs | $ku_route | $ea_route | $ag_route |
-| workload replicas ready | $(ready_replicas kind-ai-gw-kuadrant) | $(ready_replicas kind-ai-gw-envoy) | $(ready_replicas kind-ai-gw-agent) |
-| KServe-owned Deployments/Services/Pool | $(owned_resources kind-ai-gw-kuadrant) | $(owned_resources kind-ai-gw-envoy) | $(owned_resources kind-ai-gw-agent) |
-| chat endpoint selection and success | $(printf '%s\n' "$ku_samples" | distribution) | $(printf '%s\n' "$ea_samples" | distribution) | $(printf '%s\n' "$ag_samples" | distribution) |
-| streaming usage chunk | $(stream_usage "$KU_BASE") | $(stream_usage "$EA_BASE") | $(stream_usage "$AG_BASE") |
-| embeddings API | $(embeddings_api "$KU_BASE") | $(embeddings_api "$EA_BASE") | $(embeddings_api "$AG_BASE") |
-| reranking API | $(rerank_api "$KU_BASE") | $(rerank_api "$EA_BASE") | $(rerank_api "$AG_BASE") |
-| model catalog (GET /v1/models) | $(models_api "$KU_BASE") | $(models_api "$EA_BASE") | $(models_api "$AG_BASE") |
-| tiered chat models | $(tiered_chat "$KU_BASE") | $(tiered_chat "$EA_BASE") | $(tiered_chat "$AG_BASE") |
+| \`LLMInferenceService\` Ready | $ku_llmisvc | $ea_llmisvc | $ag_llmisvc |
+| Route Accepted / ResolvedRefs | $ku_route | $ea_route | $ag_route |
+| Workload replicas | $(ready_replicas kind-ai-gw-kuadrant) | $(ready_replicas kind-ai-gw-envoy) | $(ready_replicas kind-ai-gw-agent) |
+| KServe-owned Deployments, Services, and Pool | $(owned_resources kind-ai-gw-kuadrant) | $(owned_resources kind-ai-gw-envoy) | $(owned_resources kind-ai-gw-agent) |
+| Latest routing sample | $(printf '%s\n' "$ku_samples" | distribution) | $(printf '%s\n' "$ea_samples" | distribution) | $(printf '%s\n' "$ag_samples" | distribution) |
+| Streaming usage chunk | $(stream_usage "$KU_BASE") | $(stream_usage "$EA_BASE") | $(stream_usage "$AG_BASE") |
+| Embeddings API | $(embeddings_api "$KU_BASE") | $(embeddings_api "$EA_BASE") | $(embeddings_api "$AG_BASE") |
+| Reranking API | $(rerank_api "$KU_BASE") | $(rerank_api "$EA_BASE") | $(rerank_api "$AG_BASE") |
+| Model catalog (GET /v1/models) | $(models_api "$KU_BASE") | $(models_api "$EA_BASE") | $(models_api "$AG_BASE") |
+| Tiered chat models | $(tiered_chat "$KU_BASE") | $(tiered_chat "$EA_BASE") | $(tiered_chat "$AG_BASE") |
 | RAG embedding models | $(rag_embeddings_api "$KU_BASE") | $(rag_embeddings_api "$EA_BASE") | $(rag_embeddings_api "$AG_BASE") |
-| speech-to-text API | $(stt_api "$KU_BASE") | $(stt_api "$EA_BASE") | $(stt_api "$AG_BASE") |
-| speaker diarization | $(diarization_api "$KU_BASE") | $(diarization_api "$EA_BASE") | $(diarization_api "$AG_BASE") |
-| p50 gateway-to-KServe latency | $(printf '%s\n' "$ku_samples" | p50) | $(printf '%s\n' "$ea_samples" | p50) | $(printf '%s\n' "$ag_samples" | p50) |
-
-## Gateway features
-
-Measured only when \`make policies\` has been run; otherwise the probes read
-"no policy" and the readiness row counts only the policy objects \`make up\`
-already installs. Enforcement checks report the request number that first
-returned HTTP 429.
-
-| Check | OpenShift profile (Kuadrant + Istio/Envoy) | Envoy AI Gateway | agentgateway |
-|---|---|---|---|
-| policy objects reporting ready | $ku_policies | $ea_policies | $ag_policies |
+| Speech-to-text API | $(stt_api "$KU_BASE") | $(stt_api "$EA_BASE") | $(stt_api "$AG_BASE") |
+| Speaker diarization | $(diarization_api "$KU_BASE") | $(diarization_api "$EA_BASE") | $(diarization_api "$AG_BASE") |
+| Local chat p50 | $(printf '%s\n' "$ku_samples" | p50) | $(printf '%s\n' "$ea_samples" | p50) | $(printf '%s\n' "$ag_samples" | p50) |
+| Policy objects reporting ready | $ku_policies | $ea_policies | $ag_policies |
 | Keycloak token issuance | $(token_issuance "$KU_BASE") | $(token_issuance "$EA_BASE") | $(token_issuance "$AG_BASE") |
-| authentication: anonymous / forged / valid | $(authentication_probe "$KU_BASE") | $(authentication_probe "$EA_BASE") | $(authentication_probe "$AG_BASE") |
-| authorization: guest / non-admin B300 / admin B300 | $(authorization_probe "$KU_BASE") | $(authorization_probe "$EA_BASE") | $(authorization_probe "$AG_BASE") |
-| request rate limit (5 per minute) | $(limit_probe "$KU_BASE" 'x-rate-limit-probe: true' 8) | $(limit_probe "$EA_BASE" 'x-rate-limit-probe: true' 8) | $(limit_probe "$AG_BASE" 'x-rate-limit-probe: true' 8) |
-| quota limit (3 per window) | $(quota_probe "$KU_BASE") | $(quota_probe "$EA_BASE") | $(quota_probe "$AG_BASE") |
-| token limit (100 tokens per minute) | $(token_limit_probe "$KU_BASE") | $(token_limit_probe "$EA_BASE") | $(token_limit_probe "$AG_BASE") |
+| Authentication: anonymous / forged / valid | $(authentication_probe "$KU_BASE") | $(authentication_probe "$EA_BASE") | $(authentication_probe "$AG_BASE") |
+| Authorization: guest / non-admin B300 / admin B300 | $(authorization_probe "$KU_BASE") | $(authorization_probe "$EA_BASE") | $(authorization_probe "$AG_BASE") |
+| Request rate limit (5 per minute) | $(limit_probe "$KU_BASE" 'x-rate-limit-probe: true' 8) | $(limit_probe "$EA_BASE" 'x-rate-limit-probe: true' 8) | $(limit_probe "$AG_BASE" 'x-rate-limit-probe: true' 8) |
+| Quota limit (3 per window) | $(quota_probe "$KU_BASE") | $(quota_probe "$EA_BASE") | $(quota_probe "$AG_BASE") |
+| Token limit (100 tokens per minute) | $(token_limit_probe "$KU_BASE") | $(token_limit_probe "$EA_BASE") | $(token_limit_probe "$AG_BASE") |
 | CORS preflight answered | $(cors_probe "$KU_BASE") | $(cors_probe "$EA_BASE") | $(cors_probe "$AG_BASE") |
-
-### How each stack expresses those features
-
-Configuration facts, not measurements: the resource each gateway uses for the
-same job, and where the counters live.
-
-| Feature | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
-|---|---|---|---|
-| JWT / OIDC authentication | \`AuthPolicy\` \`authentication.jwt\` | \`SecurityPolicy\` \`jwt.providers\` | \`AgentgatewayPolicy\` \`traffic.jwtAuthentication\` |
-| browser login flow | \`OIDCPolicy\` | \`SecurityPolicy\` \`oidc\` | MCP OAuth metadata, Keycloak preset |
-| API key authentication | \`AuthPolicy\` \`authentication.apiKey\`, Secret-backed | \`SecurityPolicy\` \`apiKeyAuth\` | \`traffic.apiKeyAuthentication\`, Secret or ConfigMap |
-| mTLS client identity | \`AuthPolicy\` \`authentication.x509\` | \`ClientTrafficPolicy\` TLS settings | \`frontend.tls\` |
-| external authorization | \`AuthPolicy\` \`metadata.http\`, OPA, SpiceDB | \`SecurityPolicy\` \`extAuth\` | \`traffic.extAuth\` |
-| authorization rules | pattern matching, CEL, OPA Rego | claim and header rules, first match wins | CEL \`matchExpressions\`, Allow/Deny/Require |
-| request rate limiting | \`RateLimitPolicy\`, Limitador | \`BackendTrafficPolicy\` global or local | \`traffic.rateLimit.local\` or global |
-| quota windows | any window up to \`24h\` in one policy | \`unit: Day\`, \`Month\`, \`Year\` | local limits stop at \`Hours\`; longer needs a global service |
-| token budgets | \`TokenRateLimitPolicy\`, reads \`usage.total_tokens\` | \`llmRequestCosts\` into Envoy metadata, charged by the rate limit filter | \`unit: Tokens\` on a rate limit descriptor |
-| counter storage | Limitador, installed by the operator | external Redis plus the rate limit service | in-process for local limits |
-| per-identity buckets | CEL counters over auth identity | rate limit descriptors over headers | descriptors over CEL, global mode only |
-| LLM request shaping | none | \`AIGatewayRoute\` body and header mutation, model name override | \`backend.ai\` model aliases, prompt prepend/append, prompt caching |
-| prompt guardrails | none | none | \`backend.ai.promptGuard\` |
-| provider credentials | none | \`BackendSecurityPolicy\` | backend auth on \`AgentgatewayBackend\` |
-| MCP routing | none | \`MCPRoute\` | native MCP support with OAuth |
-| telemetry controls | \`TelemetryPolicy\` metric labels | \`EnvoyProxy\` telemetry | \`frontend.metrics\`, \`tracing\`, \`accessLog\` |
-
-## Shared path
-
-    client -> Gateway -> HTTPRoute -> InferencePool
-           -> KServe-managed EPP -> selected KServe model pod
-
-The Kuadrant column mirrors OpenShift AI's shared-Gateway topology with an
-\`openshift-ai-inference\` Gateway in \`openshift-ingress\`, an Istio control plane,
-an Envoy proxy, and Kuadrant policy. It is a kind analogue, not a Red Hat
-product installation. Latency is a local smoke-test against a zero-delay mock,
-not a production benchmark.
 EOF
+)"
 
-echo "wrote $OUT" >&2
-cat "$OUT"
+COMPARISON_ROWS="$comparison_rows" python3 - "$README" <<'PY'
+import os
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+start = "<!-- comparison-results:start -->"
+end = "<!-- comparison-results:end -->"
+content = path.read_text(encoding="utf-8")
+if content.count(start) != 1 or content.count(end) != 1:
+    raise SystemExit(f"expected exactly one comparison marker pair in {path}")
+
+replacement = f"{start}\n{os.environ['COMPARISON_ROWS'].rstrip()}\n{end}"
+prefix, remainder = content.split(start, 1)
+_, suffix = remainder.split(end, 1)
+updated = prefix + replacement + suffix
+path.write_text(updated, encoding="utf-8")
+PY
+
+echo "updated live comparison rows in $README" >&2
+printf '## Live gateway comparison — %s UTC\n\n' "$timestamp"
+printf '| Check | OpenShift profile (Kuadrant + Istio/Envoy) | Envoy AI Gateway | agentgateway |\n'
+printf '|---|---|---|---|\n'
+printf '%s\n' "$comparison_rows"
