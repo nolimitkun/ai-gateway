@@ -17,7 +17,7 @@ on:
         type: boolean
         default: true
       requests:
-        description: chat requests sampled per gateway
+        description: chat requests sampled per gateway (positive integer)
         type: string
         default: '30'
   schedule:
