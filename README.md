@@ -1,7 +1,8 @@
 # KServe LLMInferenceService gateway comparison
 
 This repository runs one KServe `LLMInferenceService` through three Gateway API
-stacks and compares the resulting data path:
+stacks and compares chat completions, embeddings, reranking, and speech-to-text
+over the resulting data path:
 
 | Stack | Pinned version | Local endpoint |
 |---|---:|---|
@@ -12,7 +13,8 @@ stacks and compares the resulting data path:
 
 There is only one inference path in the repository. KServe owns the workload,
 Service, llm-d endpoint picker, and `InferencePool`; each gateway receives the
-same `HTTPRoute` to that pool.
+same `HTTPRoute` to that pool. The route matches `/v1`, so every mock API is
+tested through the identical gateway and endpoint-selection chain.
 
 Kuadrant is not itself a proxy. The OpenShift profile approximates OpenShift
 AI with Connectivity Link by combining Kuadrant policy, an Istio Gateway API
@@ -46,7 +48,7 @@ in for the OpenShift Gateway controller and manages the Envoy proxy directly.
 The resource names, shared-Gateway topology, route attachment, policy layer,
 and KServe data path follow the OpenShift AI shape.
 
-A direct request is identical for every endpoint:
+A direct chat request is identical for every gateway endpoint:
 
 ```bash
 curl http://localhost:8082/v1/chat/completions \
@@ -57,11 +59,41 @@ curl http://localhost:8082/v1/chat/completions \
 Use ports `8080` and `8081` for Envoy AI Gateway and agentgateway. No
 gateway-selection header is required because there is no alternate route.
 
+### Mock inference APIs
+
+The shared CPU runtime exposes four deterministic APIs:
+
+| Capability | Endpoint | Request format | Mock behavior |
+|---|---|---|---|
+| chat | `POST /v1/chat/completions` | OpenAI JSON, including streaming | identifies the selected KServe pod and returns usage |
+| embeddings | `POST /v1/embeddings` | OpenAI JSON with string or string-array `input` | returns normalized, deterministic 8-dimensional vectors |
+| reranking | `POST /v1/rerank` | JSON with `query`, `documents`, and optional `top_n` | ranks documents by deterministic token overlap |
+| speech-to-text | `POST /v1/audio/transcriptions` | OpenAI-style multipart `file` and `model` fields | returns a deterministic transcription containing the filename and byte count |
+
+Use any of the three gateway base URLs with the same requests:
+
+```bash
+BASE=http://localhost:8082
+
+curl "$BASE/v1/embeddings" \
+  -H 'content-type: application/json' \
+  -d '{"model":"mock-embedding","input":["gateway inference","KServe routing"]}'
+
+curl "$BASE/v1/rerank" \
+  -H 'content-type: application/json' \
+  -d '{"model":"mock-reranker","query":"gateway inference","documents":["unrelated","gateway inference routing"],"top_n":1}'
+
+curl "$BASE/v1/audio/transcriptions" \
+  -F 'file=@sample.wav;type=audio/wav' \
+  -F 'model=mock-whisper'
+```
+
 Useful targets:
 
 ```bash
 make status
 make compare
+make test
 make agent-ui
 make down
 ```
@@ -83,7 +115,7 @@ cluster.
 | Platform version | not applicable | Red Hat OpenShift AI 3.5 |
 | LLM API | `serving.kserve.io/v1alpha2` `LLMInferenceService` in this pinned upstream release | use the `LLMInferenceService` API installed by the selected OpenShift AI release; currently documented as `serving.kserve.io/v1alpha1` |
 | Gateway prerequisite | this repository installs each GatewayClass and Gateway | a `GatewayClass` and `Gateway/openshift-ai-inference` in `openshift-ingress` |
-| Model runtime | CPU mock for repeatable tests; use vLLM and GPUs for production | an enabled OpenShift AI serving runtime, normally vLLM for LLMs |
+| Model runtime | multi-task CPU mock for repeatable API tests; use task-specific production runtimes | an enabled OpenShift AI serving runtime, normally vLLM for LLMs |
 | Installation command | `make up` | install and configure OpenShift AI; do not run `scripts/install-kserve.sh` |
 | Validation status here | automated and tested | compatibility guidance only; not automated by this repository |
 
@@ -167,7 +199,7 @@ flowchart LR
     LLMISVC["LLMInferenceService/kserve-mock<br/>serving.kserve.io/v1alpha2"]
     EPP["llm-d EPP<br/>Deployment + Service"]
     WORKLOAD["model workload<br/>Deployment + Service"]
-    PODS["2 OpenAI-compatible model pods"]
+    PODS["2 multi-task inference pods<br/>chat + embeddings + rerank + STT"]
   end
 
   KU -->|attaches policy| ROUTE
@@ -200,7 +232,7 @@ The repository declares only the portable resources needed around KServe:
 | Owner | Resource | Purpose |
 |---|---|---|
 | repository | `GatewayClass` / `Gateway` | selects each gateway implementation |
-| repository | `HTTPRoute/kserve-mock` | sends `/v1` traffic to the KServe pool |
+| repository | `HTTPRoute/kserve-mock` | sends all chat, embedding, reranking, and STT `/v1` traffic to the KServe pool |
 | repository | `LLMInferenceService/kserve-mock` | desired model, workload, replicas, router, and scheduler |
 | repository | two `LLMInferenceServiceConfig` objects | replace GPU/vLLM defaults with the complete CPU fixture |
 | repository, Kuadrant cluster only | `RateLimitPolicy/kserve-mock` | proves Kuadrant policy attachment without constraining the sample |
@@ -265,6 +297,9 @@ router:
   and pool;
 - successful distribution across both model pods;
 - OpenAI streaming with a usage chunk;
+- OpenAI-compatible embeddings with deterministic 8-dimensional vectors;
+- deterministic reranking and `top_n` ordering;
+- multipart speech-to-text upload and response handling;
 - local p50 request latency;
 - Kuadrant `RateLimitPolicy` readiness.
 
@@ -287,11 +322,14 @@ The validated run on 24 August 2026 used 30 requests per gateway:
 | successful requests | 30/30 | 30/30 | 30/30 |
 | selected model pods | 2 | 2 | 2 |
 | streaming usage | yes | yes | yes |
-| local p50 | 15 ms | 22 ms | 37 ms |
+| embeddings | yes | yes | yes |
+| reranking | yes | yes | yes |
+| speech-to-text | yes | yes | yes |
+| local chat p50 | 299 ms | 230 ms | 307 ms |
 
 All Gateways were Programmed, all routes were Accepted/ResolvedRefs, and all
 `LLMInferenceService` objects were Ready with 2/2 workload replicas. See the
-[raw comparison result](compare/results/comparison-20260824-165327.md).
+[raw comparison result](compare/results/comparison-20260824-173720.md).
 
 ## Why three clusters
 
@@ -307,7 +345,7 @@ kuadrant/             OpenShift-style Gateway overlay, Istio provider, and Kuadr
 envoy-ai-gateway/     pinned charts, values, and Gateway
 agentgateway/         pinned charts, values, and Gateway
 kserve/               controller charts, LLMInferenceService, route, and presets
-mock-llm/              CPU OpenAI-compatible runtime used by KServe
+mock-llm/              deterministic multi-task CPU runtime and tests
 scripts/               install and deployment orchestration
 compare/               single three-gateway KServe comparison and raw results
 ```
@@ -315,9 +353,12 @@ compare/               single three-gateway KServe comparison and raw results
 ## Production model
 
 The laptop fixture disables storage initialization and mounts a small Python
-server from a ConfigMap. To use a real model, replace the inline workload
-container with the KServe runtime preset and model URI appropriate for vLLM,
-restore GPU resources, storage initialization, and the telemetry-aware
+server from a ConfigMap. Serving chat, embeddings, reranking, and STT from one
+`LLMInferenceService` is deliberately a gateway integration fixture, not a
+production model topology. For production, deploy a model runtime suited to
+each task, give each workload its own scaling and accelerator profile, and
+route the corresponding API to that backend. For an LLM, restore the KServe
+vLLM runtime preset, GPU resources, storage initialization, and telemetry-aware
 scheduler plugins.
 
 References:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compare three gateway stacks through one identical KServe LLMInferenceService.
+# Compare chat, embeddings, reranking, and STT through one KServe service.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:-$ROOT/compare/results/comparison-$(date +%Y%m%d-%H%M%S).md}"
@@ -56,6 +56,54 @@ stream_usage() {
   [[ "$count" -gt 0 ]] && echo yes || echo no
 }
 
+embeddings_api() {
+  local response
+  response=$(curl -sS -m 25 "$1/v1/embeddings" \
+    -H 'content-type: application/json' \
+    -d '{"model":"mock-embedding","input":["gateway inference","KServe routing"]}' || true)
+  printf '%s' "$response" | python3 -c '
+import json, sys
+try:
+    body = json.load(sys.stdin)
+    data = body.get("data", [])
+    valid = (body.get("object") == "list" and len(data) == 2 and
+             all(item.get("object") == "embedding" and
+                 len(item.get("embedding", [])) == 8 for item in data))
+    print("yes" if valid else "no")
+except Exception:
+    print("no")'
+}
+
+rerank_api() {
+  local response
+  response=$(curl -sS -m 25 "$1/v1/rerank" \
+    -H 'content-type: application/json' \
+    -d '{"model":"mock-reranker","query":"gateway inference","documents":["unrelated","gateway inference routing","gateway"],"top_n":2}' || true)
+  printf '%s' "$response" | python3 -c '
+import json, sys
+try:
+    results = json.load(sys.stdin).get("results", [])
+    valid = len(results) == 2 and results[0].get("index") == 1
+    print("yes" if valid else "no")
+except Exception:
+    print("no")'
+}
+
+stt_api() {
+  local response
+  response=$(curl -sS -m 25 "$1/v1/audio/transcriptions" \
+    -F 'file=@/dev/null;filename=sample.wav;type=audio/wav' \
+    -F 'model=mock-whisper' || true)
+  printf '%s' "$response" | python3 -c '
+import json, sys
+try:
+    body = json.load(sys.stdin)
+    valid = body.get("model") == "mock-whisper" and "sample.wav" in body.get("text", "")
+    print("yes" if valid else "no")
+except Exception:
+    print("no")'
+}
+
 ready_replicas() {
   kubectl --context "$1" -n ai-demo get deployment/kserve-mock-kserve -o 'jsonpath={.status.readyReplicas}/{.spec.replicas}' 2>/dev/null || echo n/a
 }
@@ -104,7 +152,8 @@ cat > "$OUT" <<EOF
 # KServe gateway comparison — $(date -u '+%Y-%m-%d %H:%M UTC')
 
 All environments run KServe v0.20.0 with the same LLMInferenceService,
-two-replica CPU runtime, KServe-managed llm-d EPP, InferencePool, and HTTPRoute.
+two-replica multi-task CPU runtime, KServe-managed llm-d EPP, InferencePool,
+and HTTPRoute.
 Sample size: $N requests per gateway.
 
 | Check | OpenShift profile (Kuadrant + Istio/Envoy) | Envoy AI Gateway | agentgateway |
@@ -114,8 +163,11 @@ Sample size: $N requests per gateway.
 | HTTPRoute Accepted / ResolvedRefs | $ku_route | $ea_route | $ag_route |
 | workload replicas ready | $(ready_replicas kind-ai-gw-kuadrant) | $(ready_replicas kind-ai-gw-envoy) | $(ready_replicas kind-ai-gw-agent) |
 | KServe-owned Deployments/Services/Pool | $(owned_resources kind-ai-gw-kuadrant) | $(owned_resources kind-ai-gw-envoy) | $(owned_resources kind-ai-gw-agent) |
-| endpoint selection and success | $(printf '%s\n' "$ku_samples" | distribution) | $(printf '%s\n' "$ea_samples" | distribution) | $(printf '%s\n' "$ag_samples" | distribution) |
+| chat endpoint selection and success | $(printf '%s\n' "$ku_samples" | distribution) | $(printf '%s\n' "$ea_samples" | distribution) | $(printf '%s\n' "$ag_samples" | distribution) |
 | streaming usage chunk | $(stream_usage http://localhost:8082) | $(stream_usage http://localhost:8080) | $(stream_usage http://localhost:8081) |
+| embeddings API | $(embeddings_api http://localhost:8082) | $(embeddings_api http://localhost:8080) | $(embeddings_api http://localhost:8081) |
+| reranking API | $(rerank_api http://localhost:8082) | $(rerank_api http://localhost:8080) | $(rerank_api http://localhost:8081) |
+| speech-to-text API | $(stt_api http://localhost:8082) | $(stt_api http://localhost:8080) | $(stt_api http://localhost:8081) |
 | p50 gateway-to-KServe latency | $(printf '%s\n' "$ku_samples" | p50) | $(printf '%s\n' "$ea_samples" | p50) | $(printf '%s\n' "$ag_samples" | p50) |
 | Kuadrant RateLimitPolicy ready | $(policy_ready) | n/a | n/a |
 
