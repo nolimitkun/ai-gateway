@@ -10,6 +10,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:-$ROOT/compare/results/comparison-$(date +%Y%m%d-%H%M%S).md}"
 N="${N:-30}"
+# `seq` treats a non-integer or non-positive count as zero iterations without
+# failing, so an unusable N would otherwise produce an empty sample set under a
+# report still labelled with the requested value.
+[[ "$N" =~ ^[1-9][0-9]*$ ]] || {
+  echo "N must be a positive integer, got '$N'" >&2
+  exit 2
+}
 KU_BASE=http://localhost:8082
 EA_BASE=http://localhost:8080
 AG_BASE=http://localhost:8081

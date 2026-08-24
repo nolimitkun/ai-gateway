@@ -1,0 +1,26 @@
+name: checks
+
+# The half of the harness that needs no cluster: the mock runtime's unit
+# tests and the CRD schema validation for every manifest. Both finish in
+# about a minute, so they run on every push.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: mock runtime tests
+        run: make test
+
+      - name: manifest schema validation
+        run: make validate
