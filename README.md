@@ -115,7 +115,8 @@ The tier is visible in the response: `mock_tier`, the reported
 `completion_tokens`, and the assistant message all follow it, so a routing rule
 that is supposed to send a request to a small model can be checked from the
 response alone. `max_tokens` above a model's output limit returns HTTP 400 with
-`context_length_exceeded`.
+`context_length_exceeded`; below the tier's own completion length it truncates
+the answer, reports the requested token count, and finishes with `length`.
 
 ```bash
 curl "$BASE/v1/chat/completions" \
@@ -134,7 +135,8 @@ Speech-to-text models, with ASR and diarization:
 
 `response_format=verbose_json` adds timestamped segments. `diarization=true`
 labels each segment with a `SPEAKER_NN` turn and adds a per-speaker summary;
-`num_speakers` pins the speaker count. Diarization on an ASR-only model such as
+`num_speakers` pins the speaker count, and the transcript grows to give every
+pinned speaker a turn. Diarization on an ASR-only model such as
 `voxtral-mini-3b` returns HTTP 400. Whisper has no native diarization, so that
 flag mirrors the usual whisper plus speaker-attribution pipeline rather than a
 single model.

@@ -34,6 +34,19 @@ class RuntimeTest(unittest.TestCase):
         connection.close()
         return response.status, payload
 
+    def request_raw(self, path, payload):
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_address[1], timeout=5
+        )
+        connection.request(
+            "POST", path, body=json.dumps(payload),
+            headers={"content-type": "application/json"},
+        )
+        response = connection.getresponse()
+        body = response.read().decode()
+        connection.close()
+        return response.status, body
+
     def post_json(self, path, payload):
         return self.request(path, json.dumps(payload))
 
@@ -214,6 +227,62 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["code"], "context_length_exceeded")
 
+    def test_max_tokens_below_the_tier_truncates_the_completion(self):
+        status, payload = self.post_json(
+            "/v1/chat/completions",
+            {
+                "model": "kimi-k3",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["usage"]["completion_tokens"], 1)
+        self.assertEqual(payload["choices"][0]["finish_reason"], "length")
+        self.assertEqual(len(payload["choices"][0]["message"]["content"].split()), 1)
+
+    def test_streaming_honors_max_tokens(self):
+        status, body = self.request_raw(
+            "/v1/chat/completions",
+            {
+                "model": "glm-5.3",
+                "max_tokens": 2,
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        self.assertEqual(status, 200)
+        chunks = [
+            json.loads(line[len("data: ") :])
+            for line in body.splitlines()
+            if line.startswith("data: ") and not line.endswith("[DONE]")
+        ]
+        content = chunks[0]["choices"][0]
+        self.assertEqual(len(content["delta"]["content"].split()), 2)
+        self.assertEqual(content["finish_reason"], "length")
+        self.assertEqual(chunks[-1]["usage"]["completion_tokens"], 2)
+
+    def test_max_tokens_above_the_tier_keeps_the_whole_completion(self):
+        status, payload = self.post_json(
+            "/v1/chat/completions",
+            {
+                "model": "qwen3.8-27b",
+                "max_tokens": 4096,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["usage"]["completion_tokens"], 12)
+        self.assertEqual(payload["choices"][0]["finish_reason"], "stop")
+
+    def test_messages_must_be_an_array(self):
+        for messages in (None, "hi", {"role": "user"}):
+            status, payload = self.post_json(
+                "/v1/chat/completions", {"model": "kimi-k3", "messages": messages}
+            )
+            self.assertEqual(status, 400)
+            self.assertEqual(payload["error"]["type"], "invalid_request_error")
+
     def test_embedding_models_use_their_own_dimensions(self):
         for model, dimensions in (
             ("qwen3-embedding-8b", 4096),
@@ -273,6 +342,23 @@ class RuntimeTest(unittest.TestCase):
         self.assertTrue(speakers <= {"SPEAKER_00", "SPEAKER_01", "SPEAKER_02"})
         self.assertEqual({entry["id"] for entry in payload["speakers"]}, speakers)
         self.assertAlmostEqual(payload["segments"][-1]["end"], payload["duration"], places=3)
+
+    def test_diarization_gives_every_pinned_speaker_a_turn(self):
+        for requested in (2, 5, 8):
+            status, payload = self.multipart(
+                {
+                    "model": "whisper-large-v3",
+                    "diarization": "true",
+                    "num_speakers": str(requested),
+                }
+            )
+            self.assertEqual(status, 200)
+            self.assertGreaterEqual(len(payload["segments"]), requested)
+            self.assertEqual(len(payload["speakers"]), requested)
+            self.assertEqual(
+                {segment["speaker"] for segment in payload["segments"]},
+                {"SPEAKER_%02d" % index for index in range(requested)},
+            )
 
     def test_diarization_is_deterministic(self):
         first = self.multipart({"model": "voxtral-small-24b", "diarization": "yes"})

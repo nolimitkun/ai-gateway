@@ -361,8 +361,12 @@ def parse_multipart(content_type, body):
 
 
 def diarized_segments(seed, duration, speaker_count):
-    """Split a mock transcript into deterministic speaker turns."""
-    segment_count = 2 + digest_int(seed, "segments") % 4
+    """Split a mock transcript into deterministic speaker turns.
+
+    Every pinned speaker has to get a turn, so a large num_speakers raises the
+    segment count rather than leaving speakers out of the transcript.
+    """
+    segment_count = max(2 + digest_int(seed, "segments") % 4, speaker_count)
     span = round(duration / segment_count, 3)
     segments = []
     for index in range(segment_count):
@@ -400,6 +404,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         print(f"[{UPSTREAM}] {fmt % args}", flush=True)
+
+    def send_response(self, *args, **kwargs):
+        self.response_started = True
+        BaseHTTPRequestHandler.send_response(self, *args, **kwargs)
+
+    def dispatch(self, handler):
+        """Run a handler, answering with an error instead of a dropped socket."""
+        self.response_started = False
+        try:
+            handler()
+        except Exception as error:  # noqa: BLE001 - the fixture must still answer
+            self.log_message("handler failed: %r", error)
+            if not self.response_started:
+                self.send_error_payload(
+                    500, f"mock runtime error: {error}", "internal_error"
+                )
 
     def send_json(self, status, payload):
         body = json.dumps(payload).encode()
@@ -496,9 +516,9 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
         elif path == "/v1/models":
-            self.handle_model_list(query)
+            self.dispatch(lambda: self.handle_model_list(query))
         elif path.startswith("/v1/models/"):
-            self.handle_model_read(path[len("/v1/models/") :])
+            self.dispatch(lambda: self.handle_model_read(path[len("/v1/models/") :]))
         else:
             self.send_json(404, {"error": "not found"})
 
@@ -547,7 +567,7 @@ class Handler(BaseHTTPRequestHandler):
         if not handler:
             self.send_json(404, {"error": "not found"})
             return
-        handler()
+        self.dispatch(handler)
 
     def handle_chat(self):
         request = self.read_json()
@@ -557,6 +577,10 @@ class Handler(BaseHTTPRequestHandler):
         if entry is None:
             return
         model = entry["id"]
+        messages = request.get("messages", [])
+        if not isinstance(messages, list):
+            self.send_request_error("messages must be an array")
+            return
         max_tokens = request.get("max_tokens", request.get("max_completion_tokens"))
         if max_tokens is not None:
             if not isinstance(max_tokens, int) or max_tokens <= 0:
@@ -574,7 +598,7 @@ class Handler(BaseHTTPRequestHandler):
 
         prompt = " ".join(
             message.get("content", "")
-            for message in request.get("messages", [])
+            for message in messages
             if isinstance(message, dict) and isinstance(message.get("content"), str)
         )
         text = (
@@ -583,6 +607,13 @@ class Handler(BaseHTTPRequestHandler):
         )
         prompt_tokens = max(token_count(prompt), 1)
         completion_tokens = TIER_COMPLETION_TOKENS[entry["tier"]]
+        finish_reason = "stop"
+        # A caller that asks for fewer tokens than the tier emits gets a
+        # generation that stops at its limit, like a real runtime.
+        if max_tokens is not None and max_tokens < completion_tokens:
+            completion_tokens = max_tokens
+            text = " ".join(text.split()[:max_tokens])
+            finish_reason = "length"
         usage = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -600,7 +631,13 @@ class Handler(BaseHTTPRequestHandler):
                     "id": "chatcmpl-kserve",
                     "object": "chat.completion.chunk",
                     "model": model,
-                    "choices": [{"index": 0, "delta": {"content": text}}],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": text},
+                            "finish_reason": finish_reason,
+                        }
+                    ],
                 },
                 {
                     "id": "chatcmpl-kserve",
@@ -627,7 +664,7 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "index": 0,
                         "message": {"role": "assistant", "content": text},
-                        "finish_reason": "stop",
+                        "finish_reason": finish_reason,
                     }
                 ],
                 "usage": usage,
