@@ -1,0 +1,59 @@
+# A private CA and server certificate for the KServe endpoint picker. OpenShift
+# uses platform-managed trust; cert-manager provides the local kind analogue.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: kserve-mock-epp-selfsigned
+  namespace: ai-demo
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kserve-mock-epp-root-ca
+  namespace: ai-demo
+spec:
+  isCA: true
+  commonName: kserve-mock-epp-root-ca
+  secretName: kserve-mock-epp-root-ca
+  duration: 8760h
+  renewBefore: 720h
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: kserve-mock-epp-selfsigned
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: kserve-mock-epp-ca
+  namespace: ai-demo
+spec:
+  ca:
+    secretName: kserve-mock-epp-root-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kserve-mock-epp-server
+  namespace: ai-demo
+spec:
+  secretName: kserve-mock-epp-tls
+  duration: 2160h
+  renewBefore: 360h
+  dnsNames:
+    - kserve-mock-epp-service.ai-demo.svc
+    - kserve-mock-epp-service.ai-demo.svc.cluster.local
+  usages:
+    - server auth
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: kserve-mock-epp-ca

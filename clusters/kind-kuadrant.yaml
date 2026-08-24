@@ -1,4 +1,4 @@
-# Kuadrant policy layer with Envoy Gateway as its Gateway API provider.
+# OpenShift AI analogue: Kuadrant with Istio control plane and Envoy proxy.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: ai-gw-kuadrant

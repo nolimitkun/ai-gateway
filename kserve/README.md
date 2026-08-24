@@ -1,7 +1,7 @@
 # KServe fixture
 
-The same KServe 0.20.0 `LLMInferenceService` is applied to the Kuadrant, Envoy
-AI Gateway, and agentgateway clusters.
+The same KServe 0.20.0 model and scheduler configuration is applied to the
+OpenShift-aligned Kuadrant, Envoy AI Gateway, and agentgateway clusters.
 
 ## Files
 
@@ -9,8 +9,14 @@ AI Gateway, and agentgateway clusters.
 - `manifests/route.yaml` is the only inference route in the repository.
 - `manifests/cpu-presets.yaml` prevents KServe's GPU/vLLM presets from being
   merged into this complete laptop fixture.
-- `manifests/envoy-inferencepool-rbac.yaml` lets both Envoy-backed stacks
-  watch `InferencePool`; agentgateway installs equivalent RBAC.
+- `kustomization.yaml` is the shared KServe base.
+- `../kuadrant/kserve-overlay/kustomization.yaml` changes the Gateway
+  references to `openshift-ai-inference` in `openshift-ingress` and mounts a
+  cert-manager-issued EPP certificate.
+- `../kuadrant/kserve-overlay/epp-certificate.yaml` creates the private CA and
+  DNS-valid EPP server certificate used by the OpenShift profile.
+- `manifests/envoy-inferencepool-rbac.yaml` lets Envoy Gateway watch
+  `InferencePool`; Istio and agentgateway install equivalent RBAC.
 - `values/kserve-llmisvc.values.yaml` keeps KServe from replacing the gateway
   stacks' Gateway API and inference-extension CRDs.
 
@@ -48,5 +54,9 @@ The required installation order is preserved by the scripts: Gateway API
 Inference Extension CRDs are installed before each gateway provider, followed
 by the KServe controller and the `LLMInferenceService`.
 
-The custom scheduler mounts KServe's generated TLS Secret. Both Envoy AI
-Gateway stacks and agentgateway consume that secure EPP directly.
+Envoy AI Gateway and agentgateway consume KServe's generated secure EPP
+directly. The OpenShift profile mounts a cert-manager-issued server Secret and
+adds a provider-specific `BackendTLSPolicy` plus a ConfigMap copy of its CA so
+Istio can verify the endpoint picker. This avoids treating KServe 0.20.0's
+self-signed leaf certificate (`CA:FALSE`) as a trust anchor, which Envoy
+correctly rejects.

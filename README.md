@@ -5,7 +5,7 @@ stacks and compares the resulting data path:
 
 | Stack | Pinned version | Local endpoint |
 |---|---:|---|
-| Kuadrant + Envoy AI Gateway | Kuadrant 1.5.2 / Envoy AI Gateway 1.0.0 / Envoy Gateway 1.8.1 | <http://localhost:8082> |
+| OpenShift profile | Kuadrant 1.5.2 / Istio 1.29.2 / Envoy proxy | <http://localhost:8082> |
 | Envoy AI Gateway | Envoy AI Gateway 1.0.0 / Envoy Gateway 1.8.1 | <http://localhost:8080> |
 | agentgateway | agentgateway 1.4.1 | <http://localhost:8081> |
 | shared model control plane | KServe 0.20.0 | one installation per cluster |
@@ -14,10 +14,11 @@ There is only one inference path in the repository. KServe owns the workload,
 Service, llm-d endpoint picker, and `InferencePool`; each gateway receives the
 same `HTTPRoute` to that pool.
 
-Kuadrant is not itself a proxy. It augments Envoy Gateway with policy while
-the Envoy AI Gateway extension handles KServe's `InferencePool`. This makes the
-Kuadrant environment the policy-enabled form of the Envoy AI Gateway path; it
-attaches a `RateLimitPolicy` to the shared KServe route.
+Kuadrant is not itself a proxy. The OpenShift profile approximates OpenShift
+AI with Connectivity Link by combining Kuadrant policy, an Istio Gateway API
+control plane, an Envoy gateway proxy, and a shared
+`Gateway/openshift-ai-inference` in `openshift-ingress`. It attaches a
+`RateLimitPolicy` to the KServe route.
 
 ## Quick start
 
@@ -31,16 +32,19 @@ make compare
 `make up` creates three kind clusters. The first run downloads container images
 but all Helm charts are pinned and vendored in the repository.
 
-For the Kuadrant stack, installation order matters:
+For the OpenShift profile, installation order matters:
 
-1. install the Gateway API Inference Extension CRD and Envoy `InferencePool` RBAC;
-2. let Envoy Gateway's Helm chart own the core Gateway API CRDs;
-3. start the Envoy AI Gateway extension, then restart Envoy Gateway;
-4. install Kuadrant with EnvoyPatchPolicy support enabled.
+1. install the core Gateway API and Inference Extension CRDs;
+2. install Istio with Gateway API Inference Extension support enabled;
+3. install Kuadrant and its policy operands;
+4. create the shared `openshift-ai-inference` Gateway;
+5. apply the KServe overlay that references the shared Gateway across
+   namespaces.
 
-Applying the core Gateway API bundle before the Envoy chart causes Helm
-server-side-apply ownership conflicts. Installing plain Envoy Gateway without
-the AI extension leaves KServe's `InferencePool` backend unresolved.
+OpenShift's Ingress Operator is not available on kind. Istio therefore stands
+in for the OpenShift Gateway controller and manages the Envoy proxy directly.
+The resource names, shared-Gateway topology, route attachment, policy layer,
+and KServe data path follow the OpenShift AI shape.
 
 A direct request is identical for every endpoint:
 
@@ -91,8 +95,8 @@ The automated kind deployment requires:
 - Gateway API and Gateway API Inference Extension CRDs;
 - cert-manager 1.17.0;
 - upstream KServe 0.20.0;
-- one supported gateway stack: Kuadrant + Envoy AI Gateway, Envoy AI Gateway,
-  or agentgateway;
+- one supported gateway stack: the OpenShift-aligned Kuadrant profile, Envoy
+  AI Gateway, or agentgateway;
 - enough local capacity for three kind control-plane nodes and their controller
   and proxy images.
 
@@ -136,8 +140,10 @@ accelerator before a production deployment.
 
 ## Architecture
 
-Each box below exists independently in each kind cluster. The KServe manifest
-is byte-for-byte identical across the three environments.
+Each box below exists independently in each kind cluster. The model, scheduler,
+and pool configuration are shared. The OpenShift profile applies a small
+Kustomize overlay that changes the Gateway references and supplies the trusted
+EPP certificate chain required by Istio.
 
 ```mermaid
 flowchart LR
@@ -145,7 +151,7 @@ flowchart LR
 
   subgraph Gateways["Gateway stack (one per cluster)"]
     KU["Kuadrant policies<br/>RateLimitPolicy"]
-    KUENVOY["Envoy AI Gateway<br/>Kuadrant-enabled Envoy provider"]
+    KUOS["OpenShift profile<br/>Istio control plane + Envoy proxy"]
     EAIG["Envoy AI Gateway<br/>without Kuadrant policy"]
     AG["agentgateway<br/>controller + Rust data plane"]
   end
@@ -165,11 +171,11 @@ flowchart LR
   end
 
   KU -->|attaches policy| ROUTE
-  KU -->|configures| KUENVOY
-  CLIENT --> KUENVOY
+  KU -->|configures| KUOS
+  CLIENT --> KUOS
   CLIENT --> EAIG
   CLIENT --> AG
-  KUENVOY --> GW
+  KUOS --> GW
   EAIG --> GW
   AG --> GW
   GW --> ROUTE
@@ -198,6 +204,10 @@ The repository declares only the portable resources needed around KServe:
 | repository | `LLMInferenceService/kserve-mock` | desired model, workload, replicas, router, and scheduler |
 | repository | two `LLMInferenceServiceConfig` objects | replace GPU/vLLM defaults with the complete CPU fixture |
 | repository, Kuadrant cluster only | `RateLimitPolicy/kserve-mock` | proves Kuadrant policy attachment without constraining the sample |
+| repository, Kuadrant cluster only | `Gateway/openshift-ai-inference` | reproduces the OpenShift shared-Gateway name and namespace |
+| repository, Kuadrant cluster only | Kustomize overlay | changes the route and `LLMInferenceService` Gateway references to `openshift-ingress` |
+| repository, Kuadrant cluster only | cert-manager `Issuer` / `Certificate` objects | issue a private CA and DNS-valid server certificate for the KServe endpoint picker |
+| repository, Kuadrant cluster only | `BackendTLSPolicy/kserve-mock-epp` | lets Istio verify KServe's TLS-secured endpoint picker |
 | KServe controller | workload `Deployment` and `Service` | runs two model replicas |
 | KServe controller | scheduler `Deployment` and `Service` | runs the llm-d endpoint picker |
 | KServe controller | `InferencePool` and scheduler RBAC | exposes endpoint-aware routing to the gateway |
@@ -235,6 +245,16 @@ spec:
 See [kserve/README.md](kserve/README.md) for the fixture-specific choices and
 the production model upgrade path.
 
+For the OpenShift profile, the Gateway portion is overlaid as:
+
+```yaml
+router:
+  gateway:
+    refs:
+      - name: openshift-ai-inference
+        namespace: openshift-ingress
+```
+
 ## What the comparison measures
 
 `make compare` checks:
@@ -252,24 +272,26 @@ Raw Markdown results are written to `compare/results/`. The latency value is a
 local smoke-test against a zero-delay Python runtime. It is useful for catching
 regressions in this fixture, not for ranking production gateways.
 
-The first two columns use the same Envoy AI Gateway and Envoy Gateway versions:
-one with Kuadrant policy and one without. The third uses agentgateway's Rust
-proxy. This isolates the effect of the Kuadrant policy layer more cleanly.
+The first column is an OpenShift architectural analogue: Kuadrant policy,
+Istio control plane, and Envoy proxy. The second uses Envoy AI Gateway and
+Envoy Gateway directly. The third uses agentgateway's Rust proxy. The first
+column is intended for topology and compatibility comparison, not for claiming
+Red Hat product certification.
 
 ## Latest result
 
 The validated run on 24 August 2026 used 30 requests per gateway:
 
-| Check | Kuadrant + Envoy AI Gateway | Envoy AI Gateway | agentgateway |
+| Check | OpenShift profile | Envoy AI Gateway | agentgateway |
 |---|---:|---:|---:|
 | successful requests | 30/30 | 30/30 | 30/30 |
 | selected model pods | 2 | 2 | 2 |
 | streaming usage | yes | yes | yes |
-| local p50 | 88 ms | 85 ms | 64 ms |
+| local p50 | 15 ms | 22 ms | 37 ms |
 
 All Gateways were Programmed, all routes were Accepted/ResolvedRefs, and all
 `LLMInferenceService` objects were Ready with 2/2 workload replicas. See the
-[raw comparison result](compare/results/comparison-20260824-101555.md).
+[raw comparison result](compare/results/comparison-20260824-165327.md).
 
 ## Why three clusters
 
@@ -281,7 +303,7 @@ upgrading another stack's CRDs and makes teardown deterministic.
 
 ```text
 clusters/             three kind cluster definitions
-kuadrant/             Envoy provider, Kuadrant instance, and route policy
+kuadrant/             OpenShift-style Gateway overlay, Istio provider, and Kuadrant policy
 envoy-ai-gateway/     pinned charts, values, and Gateway
 agentgateway/         pinned charts, values, and Gateway
 kserve/               controller charts, LLMInferenceService, route, and presets
@@ -304,3 +326,5 @@ References:
 - [KServe LLMInferenceService architecture](https://kserve.github.io/website/docs/concepts/architecture/control-plane-llmisvc)
 - [Kuadrant overview](https://docs.kuadrant.io/)
 - [Kuadrant Helm installation](https://docs.kuadrant.io/dev/install-helm/)
+- [OpenShift AI distributed inference](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/deploy_models_using_distributed_inference_with_llm-d/deploying-models-using-distributed-inference_distributed-inference)
+- [OpenShift Gateway API implementation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html-single/ingress_and_load_balancing/ingress_and_load_balancing)

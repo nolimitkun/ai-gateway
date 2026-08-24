@@ -8,8 +8,8 @@ BODY='{"model":"mock-kserve","messages":[{"role":"user","content":"hello through
 STREAM='{"model":"mock-kserve","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hello through KServe"}]}'
 
 condition_status() {
-  local context="$1" object="$2" condition="$3"
-  kubectl --context "$context" -n ai-demo get "$object" -o json 2>/dev/null | python3 -c '
+  local context="$1" object="$2" condition="$3" namespace="${4:-ai-demo}"
+  kubectl --context "$context" -n "$namespace" get "$object" -o json 2>/dev/null | python3 -c '
 import json, sys
 want = sys.argv[1]
 try:
@@ -89,7 +89,7 @@ ku_samples=$(samples http://localhost:8082)
 ea_samples=$(samples http://localhost:8080)
 ag_samples=$(samples http://localhost:8081)
 
-ku_gateway=$(condition_status kind-ai-gw-kuadrant gateway/ai-gateway Programmed)
+ku_gateway=$(condition_status kind-ai-gw-kuadrant gateway/openshift-ai-inference Programmed openshift-ingress)
 ea_gateway=$(condition_status kind-ai-gw-envoy gateway/ai-gateway Programmed)
 ag_gateway=$(condition_status kind-ai-gw-agent gateway/ai-gateway Programmed)
 ku_route="$(condition_status kind-ai-gw-kuadrant httproute/kserve-mock Accepted) / $(condition_status kind-ai-gw-kuadrant httproute/kserve-mock ResolvedRefs)"
@@ -107,7 +107,7 @@ All environments run KServe v0.20.0 with the same LLMInferenceService,
 two-replica CPU runtime, KServe-managed llm-d EPP, InferencePool, and HTTPRoute.
 Sample size: $N requests per gateway.
 
-| Check | Kuadrant + Envoy AI Gateway | Envoy AI Gateway | agentgateway |
+| Check | OpenShift profile (Kuadrant + Istio/Envoy) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
 | Gateway Programmed | $ku_gateway | $ea_gateway | $ag_gateway |
 | LLMInferenceService Ready | $ku_llmisvc | $ea_llmisvc | $ag_llmisvc |
@@ -124,10 +124,11 @@ Sample size: $N requests per gateway.
     client -> Gateway -> HTTPRoute -> InferencePool
            -> KServe-managed EPP -> selected KServe model pod
 
-Kuadrant is a policy layer. Its column uses Envoy Gateway with the Envoy AI
-Gateway InferencePool extension, matching the unprotected Envoy column while
-adding Kuadrant policy. Latency is a local smoke-test against a zero-delay
-mock, not a production benchmark.
+The Kuadrant column mirrors OpenShift AI's shared-Gateway topology with an
+\`openshift-ai-inference\` Gateway in \`openshift-ingress\`, an Istio control plane,
+an Envoy proxy, and Kuadrant policy. It is a kind analogue, not a Red Hat
+product installation. Latency is a local smoke-test against a zero-delay mock,
+not a production benchmark.
 EOF
 
 echo "wrote $OUT" >&2
