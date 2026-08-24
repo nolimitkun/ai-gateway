@@ -44,23 +44,37 @@ between the three gateways.
 | Provider credentials | Not provided by the compared policy | `BackendSecurityPolicy` | Backend authentication on `AgentgatewayBackend` |
 | MCP routing | Not provided by the compared policy | `MCPRoute` | Native MCP routing with OAuth |
 | Telemetry controls | `TelemetryPolicy` metric labels | `EnvoyProxy` telemetry | `frontend.metrics`, tracing, and access logs |
+<!-- comparison-results:start -->
+| Last live comparison (UTC) | 2026-08-24 15:52 (30 requests) | 2026-08-24 15:52 (30 requests) | 2026-08-24 15:52 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
 | Workload replicas | 2/2 | 2/2 | 2/2 |
 | KServe-owned Deployments, Services, and Pool | 5 | 5 | 5 |
 | Latest routing sample | 30/30 HTTP 200, 2 pods, 0 unknown | 30/30 HTTP 200, 2 pods, 0 unknown | 30/30 HTTP 200, 2 pods, 0 unknown |
-| APIs validated in latest sample | Streaming chat, embeddings, reranking, transcription | Streaming chat, embeddings, reranking, transcription | Streaming chat, embeddings, reranking, transcription |
+| Streaming usage chunk | Yes | Yes | Yes |
+| Embeddings API | Yes | Yes | Yes |
+| Reranking API | Yes | Yes | Yes |
+| Model catalog | Not recorded | Not recorded | Not recorded |
+| Tiered chat models | Not recorded | Not recorded | Not recorded |
+| RAG embedding models | Not recorded | Not recorded | Not recorded |
+| Speech-to-text API | Yes | Yes | Yes |
+| Speaker diarization | Not recorded | Not recorded | Not recorded |
 | Local chat p50 | 299 ms | 230 ms | 307 ms |
-| Baseline Kuadrant `RateLimitPolicy` Ready | Yes | Not applicable | Not applicable |
-| Latest policy runtime result | Not yet measured; manifests pass offline schema validation | Not yet measured; manifests pass offline schema validation | Not yet measured; manifests pass offline schema validation |
+| Policy objects reporting ready | Baseline `RateLimitPolicy`: Yes | Not measured | Not measured |
+| Keycloak token issuance | Not measured | Not measured | Not measured |
+| Authentication: anonymous / forged / valid | Not measured | Not measured | Not measured |
+| Authorization: guest / non-admin B300 / admin B300 | Not measured | Not measured | Not measured |
+| Request rate limit | Not measured | Not measured | Not measured |
+| Quota limit | Not measured | Not measured | Not measured |
+| Token limit | Not measured | Not measured | Not measured |
+| CORS preflight answered | Not measured | Not measured | Not measured |
+<!-- comparison-results:end -->
 
-The latest routing sample was recorded on 24 August 2026 against a zero-delay
-Python runtime. It is a regression smoke test, not a production performance
-benchmark. All Gateways were Programmed, all routes were
-Accepted/ResolvedRefs, and every `LLMInferenceService` was Ready with 2/2
-workload replicas. The complete historical result is embedded in the matrix so
-the root README remains the repository's only Markdown document.
+`make compare` replaces only the rows between the comparison markers above.
+After each successful scheduled or manually dispatched run, the workflow
+commits the updated README. These are regression smoke tests against a
+zero-delay Python runtime, not production performance benchmarks.
 
 Kuadrant is a policy control plane, not a proxy. The OpenShift profile combines
 Kuadrant with Istio and Envoy to reproduce the OpenShift shared-Gateway shape;
@@ -397,9 +411,9 @@ unknown fields, wrong types, invalid enum values, and missing required fields.
 - policy readiness, authentication, authorization, rate limit, quota, token
   budget, and CORS when the optional layer is installed.
 
-Results are written as timestamped text reports in `compare/results/`. Offline
-schema validation cannot
-prove controller acceptance; only the live comparison can do that.
+Results update the marked rows in this README directly; no separate report is
+created. Offline schema validation cannot prove controller acceptance; only
+the live comparison can do that.
 
 ### Continuous integration
 
@@ -415,8 +429,9 @@ The full comparison creates all three kind clusters on one runner. It removes
 unused preinstalled toolchains to free disk space and raises inotify limits for
 the three sets of kubelets and controllers. Manual dispatch accepts whether to
 install policies and how many chat requests to sample per gateway. Successful
-results are added to the job summary and uploaded as an artifact; failed runs
-upload pod, policy, and event diagnostics for each cluster.
+results replace the marked comparison rows, are committed to `README.md`, and
+are added to the job summary. Failed runs upload pod, policy, and event
+diagnostics for each cluster.
 
 A standard runner provides 4 CPUs and 16 GB RAM for all three stacks. If that
 becomes insufficient, the next scaling step is one cluster per matrix job and a
