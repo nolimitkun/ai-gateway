@@ -126,6 +126,7 @@ class Contract:
                 "query": "gateway routing",
                 "documents": ["unrelated", "gateway model routing"],
                 "top_n": 1,
+                "return_documents": True,
             },
         )
         result = payload["results"][0]

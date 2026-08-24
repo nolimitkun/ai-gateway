@@ -115,12 +115,14 @@ class RuntimeTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual([item["index"] for item in payload["results"]], [1, 2])
+        self.assertTrue(all("document" not in item for item in payload["results"]))
 
     def test_vllm_rerank_aliases_share_the_contract(self):
         request = {
             "query": "gateway inference",
             "documents": ["unrelated", "gateway inference routing"],
             "top_n": 1,
+            "return_documents": True,
         }
         for path in ("/rerank", "/v1/rerank", "/v2/rerank"):
             status, payload = self.post_json(path, request)
@@ -385,6 +387,7 @@ class RuntimeTest(unittest.TestCase):
                 "model": "bge-reranker-v2-m3",
                 "query": "gateway inference",
                 "documents": ["unrelated", "gateway inference routing"],
+                "return_documents": True,
             },
         )
         self.assertEqual(status, 200)

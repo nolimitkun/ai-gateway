@@ -791,6 +791,9 @@ class Handler(BaseHTTPRequestHandler):
             ),
             key=lambda result: (-result["relevance_score"], result["index"]),
         )[:top_n]
+        if not request.get("return_documents", False):
+            for result in ranked:
+                result.pop("document")
         self.send_json(
             200,
             {

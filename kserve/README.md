@@ -73,7 +73,7 @@ with every gateway without provider-specific paths:
 | `/v1/models` | OpenAI model list and retrieve, with task and tier metadata |
 | `/v1/chat/completions` | OpenAI chat and server-sent event streaming |
 | `/v1/embeddings` | OpenAI embeddings response list |
-| `/rerank`, `/v1/rerank`, `/v2/rerank` | vLLM query/documents schema, including returned documents and token usage |
+| `/rerank`, `/v1/rerank`, `/v2/rerank` | vLLM query/documents schema, token usage, and opt-in returned documents |
 | `/v1/audio/transcriptions` | OpenAI multipart transcription upload, with segments and diarization |
 
 One process answers for every model a pool serves. The tiered chat, STT, and
