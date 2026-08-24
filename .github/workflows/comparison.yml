@@ -2,8 +2,9 @@ name: gateway comparison
 
 # The full run: three kind clusters, KServe in each, the gateway policy layer,
 # and the comparison probes -- everything `make up && make policies &&
-# make compare` does on a laptop. It takes the better part of an hour, so it
-# is manual and weekly rather than per-push.
+# make compare` does on a laptop. The measured rows are committed directly to
+# README.md. It takes the better part of an hour, so it is manual and weekly
+# rather than per-push.
 #
 # Standard runners are free for public repositories and give this job 4 CPUs,
 # 16 GB of RAM and a disk that needs clearing first. If a run ever exhausts
@@ -25,7 +26,7 @@ on:
     - cron: '0 6 * * 1'
 
 permissions:
-  contents: read
+  contents: write
 
 # One run at a time: three clusters and fixed host ports do not share a runner
 # with a second copy of themselves, and a cancelled half-built run tells us
@@ -98,28 +99,21 @@ jobs:
       - name: run the comparison
         env:
           N: ${{ inputs.requests || '30' }}
-        run: |
-          # Name the file this run writes by diffing the directory, so the
-          # result committed to the repository can never be mistaken for it.
-          before="$(mktemp)"; after="$(mktemp)"
-          find compare/results -name '*.md' | sort > "$before"
-          make compare
-          find compare/results -name '*.md' | sort > "$after"
-          result="$(comm -13 "$before" "$after" | tail -1)"
-          test -n "$result" || { echo "the comparison wrote no result file" >&2; exit 1; }
-          mkdir -p artifacts
-          cp "$result" artifacts/comparison.md
+        run: make compare | tee -a "$GITHUB_STEP_SUMMARY"
         timeout-minutes: 20
 
-      - name: publish the comparison to the job summary
-        if: always()
+      - name: commit the updated README
         run: |
-          if [[ -f artifacts/comparison.md ]]; then
-            cat artifacts/comparison.md >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "The comparison produced no result; see the diagnostics artifact." \
-              >> "$GITHUB_STEP_SUMMARY"
+          git diff --check
+          if git diff --quiet -- README.md; then
+            echo "README comparison rows are already current"
+            exit 0
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: refresh live gateway comparison"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: collect cluster diagnostics
         if: failure()
@@ -144,13 +138,11 @@ jobs:
           done
           { free -h; df -h /; } > diagnostics/runner.txt 2>&1
 
-      - name: upload the comparison and diagnostics
+      - name: upload diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: gateway-comparison-${{ github.run_id }}
-          path: |
-            artifacts/comparison.md
-            diagnostics/
+          path: diagnostics/
           if-no-files-found: warn
           retention-days: 30
