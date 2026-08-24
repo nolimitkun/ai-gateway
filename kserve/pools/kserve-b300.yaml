@@ -1,0 +1,198 @@
+# NVIDIA B300 serving pool (big tier).
+#
+# Models: kimi-k3, glm-5.3, deepseek-v4-pro
+#
+# This pool serves the big chat models: the largest weights and KV cache in the
+# catalog, so they take the highest-memory cards.
+#
+# On kind there are no accelerators, so the workload keeps the CPU mock and its
+# CPU requests; the pool is real KServe topology with a real InferencePool, EPP,
+# and route. `kserve/overlays/gpu` adds the node selector, toleration, and
+# nvidia.com/gpu request that the same pool needs on a GPU cluster.
+# Header-based routing to the b300 accelerator pool. Body-based model routing
+# is provider-specific; an `x-model-class` header is matched identically by
+# Istio/Envoy, Envoy AI Gateway, and agentgateway, so the same route works in
+# all three clusters. Requests without the header keep using the shared
+# kserve-mock route.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kserve-b300
+  namespace: ai-demo
+  labels:
+    ai-gateway.mock/accelerator: b300
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+          headers:
+            - name: x-model-class
+              value: b300
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-b300-inference-pool
+      timeouts:
+        request: 60s
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: kserve-b300
+  namespace: ai-demo
+  labels:
+    ai-gateway.mock/accelerator: b300
+spec:
+  model:
+    uri: hf://local/kimi-k3
+    name: kimi-k3
+  storageInitializer:
+    enabled: false
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        image: python:3.12-alpine
+        imagePullPolicy: IfNotPresent
+        command: [python3, /srv/server.py]
+        env:
+          - name: MODEL_NAME
+            value: kimi-k3
+          - name: ACCELERATOR
+            value: b300
+          - name: UPSTREAM_ID
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: LATENCY_MS
+            value: "0"
+          - name: PORT
+            value: "8000"
+        ports:
+          - name: http
+            containerPort: 8000
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 2
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 25m
+            memory: 48Mi
+          limits:
+            memory: 192Mi
+        volumeMounts:
+          - name: source
+            mountPath: /srv
+    volumes:
+      - name: source
+        configMap:
+          name: mock-llm-src
+  router:
+    gateway:
+      refs:
+        - name: ai-gateway
+          namespace: ai-demo
+    route:
+      http:
+        refs:
+          - name: kserve-b300
+    scheduler:
+      replicas: 1
+      pool:
+        spec:
+          targetPorts:
+            - number: 8000
+          appProtocol: http
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: kserve-b300
+              app.kubernetes.io/part-of: llminferenceservice
+              kserve.io/component: workload
+          endpointPickerRef:
+            name: kserve-b300-epp-service
+            port:
+              number: 9002
+            failureMode: FailOpen
+      config:
+        inline:
+          apiVersion: llm-d.ai/v1alpha1
+          kind: EndpointPickerConfig
+          plugins:
+            - type: passthrough-parser
+            - type: active-request-scorer
+            - type: session-affinity-scorer
+          requestHandler:
+            parsers:
+              - pluginRef: passthrough-parser
+          schedulingProfiles:
+            - name: default
+              plugins:
+                - pluginRef: active-request-scorer
+                  weight: 1
+                - pluginRef: session-affinity-scorer
+                  weight: 1
+      template:
+        containers:
+          - name: main
+            image: ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0
+            imagePullPolicy: IfNotPresent
+            args:
+              - --pool-name
+              - kserve-b300-inference-pool
+              - --pool-namespace
+              - ai-demo
+              - --pool-group
+              - inference.networking.k8s.io
+              - --zap-encoder
+              - json
+              - --grpc-port
+              - "9002"
+              - --grpc-health-port
+              - "9003"
+              - --cert-path
+              - /var/run/kserve/tls
+              - --metrics-endpoint-auth=false
+              - --tracing=false
+            ports:
+              - name: grpc
+                containerPort: 9002
+              - name: grpc-health
+                containerPort: 9003
+              - name: metrics
+                containerPort: 9090
+              - name: zmq
+                containerPort: 5557
+            livenessProbe:
+              grpc:
+                port: 9003
+                service: inference-extension
+              initialDelaySeconds: 5
+              periodSeconds: 10
+            readinessProbe:
+              grpc:
+                port: 9003
+                service: inference-extension
+              periodSeconds: 2
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                memory: 256Mi
+            volumeMounts:
+              - name: tls-certs
+                mountPath: /var/run/kserve/tls
+                readOnly: true
+        volumes:
+          - name: tls-certs
+            secret:
+              secretName: kserve-b300-kserve-self-signed-certs

@@ -10,6 +10,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL = os.getenv("MODEL_NAME", "mock-kserve")
 UPSTREAM = os.getenv("UPSTREAM_ID", "unknown")
+# Accelerator class of the node pool this replica runs on. Empty serves the
+# whole catalog from one pod, which is what the single-service fixture does.
+ACCELERATOR = os.getenv("ACCELERATOR", "").strip().lower()
 PORT = int(os.getenv("PORT", "8000"))
 EMBEDDING_DIMENSIONS = 8
 CREATED = 1767225600
@@ -21,6 +24,7 @@ CREATED = 1767225600
 CATALOG = [
     {
         "id": "kimi-k3",
+        "accelerator": "b300",
         "task": "chat",
         "tier": "big",
         "owned_by": "moonshot-ai",
@@ -30,6 +34,7 @@ CATALOG = [
     },
     {
         "id": "glm-5.3",
+        "accelerator": "b300",
         "task": "chat",
         "tier": "big",
         "owned_by": "zhipu-ai",
@@ -39,6 +44,7 @@ CATALOG = [
     },
     {
         "id": "deepseek-v4-pro",
+        "accelerator": "b300",
         "task": "chat",
         "tier": "big",
         "owned_by": "deepseek",
@@ -48,6 +54,7 @@ CATALOG = [
     },
     {
         "id": "deepseek-v4-flash",
+        "accelerator": "h200",
         "task": "chat",
         "tier": "medium",
         "owned_by": "deepseek",
@@ -57,6 +64,7 @@ CATALOG = [
     },
     {
         "id": "qwen3.8-27b",
+        "accelerator": "h100",
         "task": "chat",
         "tier": "small",
         "owned_by": "alibaba",
@@ -66,6 +74,7 @@ CATALOG = [
     },
     {
         "id": "mock-kserve",
+        "accelerator": "cpu",
         "task": "chat",
         "tier": "fixture",
         "owned_by": "kserve-mock",
@@ -75,6 +84,7 @@ CATALOG = [
     },
     {
         "id": "qwen3-embedding-8b",
+        "accelerator": "h100",
         "task": "embedding",
         "tier": "big",
         "owned_by": "alibaba",
@@ -85,6 +95,7 @@ CATALOG = [
     },
     {
         "id": "bge-m3",
+        "accelerator": "l40s",
         "task": "embedding",
         "tier": "medium",
         "owned_by": "baai",
@@ -95,6 +106,7 @@ CATALOG = [
     },
     {
         "id": "e5-mistral-7b-instruct",
+        "accelerator": "h100",
         "task": "embedding",
         "tier": "big",
         "owned_by": "microsoft",
@@ -105,6 +117,7 @@ CATALOG = [
     },
     {
         "id": "jina-embeddings-v3",
+        "accelerator": "l40s",
         "task": "embedding",
         "tier": "medium",
         "owned_by": "jina-ai",
@@ -115,6 +128,7 @@ CATALOG = [
     },
     {
         "id": "nomic-embed-text-v2-moe",
+        "accelerator": "l40s",
         "task": "embedding",
         "tier": "small",
         "owned_by": "nomic-ai",
@@ -125,6 +139,7 @@ CATALOG = [
     },
     {
         "id": "mock-embedding",
+        "accelerator": "cpu",
         "task": "embedding",
         "tier": "fixture",
         "owned_by": "kserve-mock",
@@ -135,6 +150,7 @@ CATALOG = [
     },
     {
         "id": "bge-reranker-v2-m3",
+        "accelerator": "l40s",
         "task": "rerank",
         "tier": "medium",
         "owned_by": "baai",
@@ -144,6 +160,7 @@ CATALOG = [
     },
     {
         "id": "jina-reranker-v2-base-multilingual",
+        "accelerator": "l40s",
         "task": "rerank",
         "tier": "small",
         "owned_by": "jina-ai",
@@ -153,6 +170,7 @@ CATALOG = [
     },
     {
         "id": "mock-reranker",
+        "accelerator": "cpu",
         "task": "rerank",
         "tier": "fixture",
         "owned_by": "kserve-mock",
@@ -162,6 +180,7 @@ CATALOG = [
     },
     {
         "id": "whisper-large-v3",
+        "accelerator": "l40s",
         "task": "transcription",
         "tier": "big",
         "owned_by": "openai",
@@ -170,6 +189,7 @@ CATALOG = [
     },
     {
         "id": "voxtral-small-24b",
+        "accelerator": "h100",
         "task": "transcription",
         "tier": "big",
         "owned_by": "mistral-ai",
@@ -178,6 +198,7 @@ CATALOG = [
     },
     {
         "id": "voxtral-mini-3b",
+        "accelerator": "l40s",
         "task": "transcription",
         "tier": "small",
         "owned_by": "mistral-ai",
@@ -186,6 +207,7 @@ CATALOG = [
     },
     {
         "id": "mock-whisper",
+        "accelerator": "cpu",
         "task": "transcription",
         "tier": "fixture",
         "owned_by": "kserve-mock",
@@ -201,6 +223,7 @@ MODELS = {entry["id"]: entry for entry in CATALOG}
 if MODEL not in MODELS:
     MODELS[MODEL] = {
         "id": MODEL,
+        "accelerator": ACCELERATOR or "cpu",
         "task": "chat",
         "tier": "fixture",
         "owned_by": "kserve-mock",
@@ -209,11 +232,30 @@ if MODEL not in MODELS:
         "features": ["chat", "streaming"],
     }
 
+# Models this replica serves. A pod in an accelerator pool answers only for the
+# models its cards are sized for; anything else belongs to another pool.
+SERVED = {
+    model_id: entry
+    for model_id, entry in MODELS.items()
+    if not ACCELERATOR or entry["accelerator"] == ACCELERATOR
+}
+
+
+def default_model(task, preferred):
+    """Return the model used when a request omits one, if this pool serves it."""
+    if preferred in SERVED and SERVED[preferred]["task"] == task:
+        return preferred
+    for model_id, entry in SERVED.items():
+        if entry["task"] == task:
+            return model_id
+    return None
+
+
 DEFAULT_MODEL = {
-    "chat": MODEL,
-    "embedding": "mock-embedding",
-    "rerank": "mock-reranker",
-    "transcription": "mock-whisper",
+    "chat": default_model("chat", MODEL),
+    "embedding": default_model("embedding", "mock-embedding"),
+    "rerank": default_model("rerank", "mock-reranker"),
+    "transcription": default_model("transcription", "mock-whisper"),
 }
 
 # Completion length reported per tier, so a client can tell the tiers apart.
@@ -273,6 +315,7 @@ def model_card(entry):
         "owned_by": entry["owned_by"],
         "task": entry["task"],
         "tier": entry["tier"],
+        "accelerator": entry["accelerator"],
         "features": entry["features"],
         "mock": True,
     }
@@ -379,6 +422,12 @@ class Handler(BaseHTTPRequestHandler):
         """Return the catalog entry for name, or None after sending an error."""
         if name is None:
             name = DEFAULT_MODEL[task]
+            if name is None:
+                self.send_request_error(
+                    f"this {ACCELERATOR} pool serves no {task} models; "
+                    "name a model from GET /v1/models"
+                )
+                return None
         if not isinstance(name, str):
             self.send_request_error("model must be a string")
             return None
@@ -389,6 +438,15 @@ class Handler(BaseHTTPRequestHandler):
                 f"model '{name}' is not in this mock catalog; see GET /v1/models",
                 "invalid_request_error",
                 "model_not_found",
+            )
+            return None
+        if name not in SERVED:
+            self.send_error_payload(
+                404,
+                f"model '{name}' runs on {entry['accelerator']} and is not served "
+                f"by this {ACCELERATOR} pool",
+                "invalid_request_error",
+                "model_not_served_here",
             )
             return None
         if entry["task"] != task:
@@ -433,7 +491,8 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "ok",
                     "pod": UPSTREAM,
                     "capabilities": ["chat", "embeddings", "rerank", "stt", "models"],
-                    "models": len(MODELS),
+                    "accelerator": ACCELERATOR or "all",
+                    "models": len(SERVED),
                 },
             )
         elif path == "/v1/models":
@@ -447,11 +506,11 @@ class Handler(BaseHTTPRequestHandler):
         filters = {}
         for pair in query.split("&"):
             key, _, value = pair.partition("=")
-            if key in ("task", "tier") and value:
+            if key in ("task", "tier", "accelerator") and value:
                 filters[key] = value
         cards = [
             model_card(entry)
-            for entry in MODELS.values()
+            for entry in SERVED.values()
             if all(entry.get(key) == value for key, value in filters.items())
         ]
         self.send_json(
@@ -460,11 +519,12 @@ class Handler(BaseHTTPRequestHandler):
                 "object": "list",
                 "data": sorted(cards, key=lambda card: (card["task"], card["id"])),
                 "mock_pod": UPSTREAM,
+                "mock_accelerator": ACCELERATOR or "all",
             },
         )
 
     def handle_model_read(self, model_id):
-        entry = MODELS.get(model_id)
+        entry = SERVED.get(model_id)
         if entry is None:
             self.send_error_payload(
                 404,
@@ -571,7 +631,9 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 ],
                 "usage": usage,
+                "mock_pod": UPSTREAM,
                 "mock_tier": entry["tier"],
+                "mock_accelerator": entry["accelerator"],
             },
         )
 
@@ -625,6 +687,7 @@ class Handler(BaseHTTPRequestHandler):
                 "model": entry["id"],
                 "usage": {"prompt_tokens": tokens, "total_tokens": tokens},
                 "mock_pod": UPSTREAM,
+                "mock_accelerator": entry["accelerator"],
                 "mock_dimensions": dimensions,
             },
         )
@@ -682,6 +745,7 @@ class Handler(BaseHTTPRequestHandler):
                 "results": ranked,
                 "usage": {"search_units": 1},
                 "mock_pod": UPSTREAM,
+                "mock_accelerator": entry["accelerator"],
             },
         )
 
@@ -761,6 +825,7 @@ class Handler(BaseHTTPRequestHandler):
             "language": fields.get("language", "en"),
             "duration": duration,
             "mock_pod": UPSTREAM,
+            "mock_accelerator": entry["accelerator"],
         }
         if response_format == "verbose_json" or diarize:
             if not diarize:

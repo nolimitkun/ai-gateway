@@ -1,0 +1,199 @@
+# NVIDIA L40S serving pool (small tier).
+#
+# Models: bge-m3, jina-embeddings-v3, nomic-embed-text-v2-moe, bge-reranker-v2-m3,
+# jina-reranker-v2-base-multilingual, whisper-large-v3, voxtral-mini-3b
+#
+# This pool serves the light retrieval, reranking, and speech models, which are
+# throughput-bound rather than memory-bound.
+#
+# On kind there are no accelerators, so the workload keeps the CPU mock and its
+# CPU requests; the pool is real KServe topology with a real InferencePool, EPP,
+# and route. `kserve/overlays/gpu` adds the node selector, toleration, and
+# nvidia.com/gpu request that the same pool needs on a GPU cluster.
+# Header-based routing to the l40s accelerator pool. Body-based model routing
+# is provider-specific; an `x-model-class` header is matched identically by
+# Istio/Envoy, Envoy AI Gateway, and agentgateway, so the same route works in
+# all three clusters. Requests without the header keep using the shared
+# kserve-mock route.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kserve-l40s
+  namespace: ai-demo
+  labels:
+    ai-gateway.mock/accelerator: l40s
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+          headers:
+            - name: x-model-class
+              value: l40s
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-l40s-inference-pool
+      timeouts:
+        request: 60s
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: kserve-l40s
+  namespace: ai-demo
+  labels:
+    ai-gateway.mock/accelerator: l40s
+spec:
+  model:
+    uri: hf://local/bge-m3
+    name: bge-m3
+  storageInitializer:
+    enabled: false
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        image: python:3.12-alpine
+        imagePullPolicy: IfNotPresent
+        command: [python3, /srv/server.py]
+        env:
+          - name: MODEL_NAME
+            value: bge-m3
+          - name: ACCELERATOR
+            value: l40s
+          - name: UPSTREAM_ID
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: LATENCY_MS
+            value: "0"
+          - name: PORT
+            value: "8000"
+        ports:
+          - name: http
+            containerPort: 8000
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 2
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 25m
+            memory: 48Mi
+          limits:
+            memory: 192Mi
+        volumeMounts:
+          - name: source
+            mountPath: /srv
+    volumes:
+      - name: source
+        configMap:
+          name: mock-llm-src
+  router:
+    gateway:
+      refs:
+        - name: ai-gateway
+          namespace: ai-demo
+    route:
+      http:
+        refs:
+          - name: kserve-l40s
+    scheduler:
+      replicas: 1
+      pool:
+        spec:
+          targetPorts:
+            - number: 8000
+          appProtocol: http
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: kserve-l40s
+              app.kubernetes.io/part-of: llminferenceservice
+              kserve.io/component: workload
+          endpointPickerRef:
+            name: kserve-l40s-epp-service
+            port:
+              number: 9002
+            failureMode: FailOpen
+      config:
+        inline:
+          apiVersion: llm-d.ai/v1alpha1
+          kind: EndpointPickerConfig
+          plugins:
+            - type: passthrough-parser
+            - type: active-request-scorer
+            - type: session-affinity-scorer
+          requestHandler:
+            parsers:
+              - pluginRef: passthrough-parser
+          schedulingProfiles:
+            - name: default
+              plugins:
+                - pluginRef: active-request-scorer
+                  weight: 1
+                - pluginRef: session-affinity-scorer
+                  weight: 1
+      template:
+        containers:
+          - name: main
+            image: ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0
+            imagePullPolicy: IfNotPresent
+            args:
+              - --pool-name
+              - kserve-l40s-inference-pool
+              - --pool-namespace
+              - ai-demo
+              - --pool-group
+              - inference.networking.k8s.io
+              - --zap-encoder
+              - json
+              - --grpc-port
+              - "9002"
+              - --grpc-health-port
+              - "9003"
+              - --cert-path
+              - /var/run/kserve/tls
+              - --metrics-endpoint-auth=false
+              - --tracing=false
+            ports:
+              - name: grpc
+                containerPort: 9002
+              - name: grpc-health
+                containerPort: 9003
+              - name: metrics
+                containerPort: 9090
+              - name: zmq
+                containerPort: 5557
+            livenessProbe:
+              grpc:
+                port: 9003
+                service: inference-extension
+              initialDelaySeconds: 5
+              periodSeconds: 10
+            readinessProbe:
+              grpc:
+                port: 9003
+                service: inference-extension
+              periodSeconds: 2
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                memory: 256Mi
+            volumeMounts:
+              - name: tls-certs
+                mountPath: /var/run/kserve/tls
+                readOnly: true
+        volumes:
+          - name: tls-certs
+            secret:
+              secretName: kserve-l40s-kserve-self-signed-certs

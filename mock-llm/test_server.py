@@ -1,6 +1,11 @@
 import http.client
 import json
+import os
+import socket
+import subprocess
+import sys
 import threading
+import time
 import unittest
 
 from server import MODELS, Handler, ThreadingHTTPServer, deterministic_embedding
@@ -138,6 +143,26 @@ class RuntimeTest(unittest.TestCase):
             ["deepseek-v4-pro", "glm-5.3", "kimi-k3"],
         )
 
+    def test_models_carry_their_accelerator_class(self):
+        status, payload = self.get("/v1/models")
+        self.assertEqual(status, 200)
+        by_id = {card["id"]: card["accelerator"] for card in payload["data"]}
+        self.assertEqual(by_id["kimi-k3"], "b300")
+        self.assertEqual(by_id["deepseek-v4-pro"], "b300")
+        self.assertEqual(by_id["deepseek-v4-flash"], "h200")
+        self.assertEqual(by_id["qwen3.8-27b"], "h100")
+        self.assertEqual(by_id["whisper-large-v3"], "l40s")
+        self.assertEqual(by_id["mock-kserve"], "cpu")
+
+    def test_model_catalog_filters_by_accelerator(self):
+        status, payload = self.get("/v1/models?accelerator=h100")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            sorted(card["id"] for card in payload["data"]),
+            ["e5-mistral-7b-instruct", "qwen3-embedding-8b", "qwen3.8-27b",
+             "voxtral-small-24b"],
+        )
+
     def test_model_read_returns_capability_metadata(self):
         status, payload = self.get("/v1/models/deepseek-v4-flash")
         self.assertEqual(status, 200)
@@ -258,6 +283,119 @@ class RuntimeTest(unittest.TestCase):
         status, payload = self.multipart({"model": "voxtral-mini-3b", "diarization": "true"})
         self.assertEqual(status, 400)
         self.assertIn("diarization", payload["error"]["message"])
+
+
+class AcceleratorPoolTest(unittest.TestCase):
+    """A replica started for one accelerator class serves only its models."""
+
+    ACCELERATOR = "b300"
+
+    @classmethod
+    def setUpClass(cls):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            cls.port = probe.getsockname()[1]
+        environment = dict(
+            os.environ,
+            ACCELERATOR=cls.ACCELERATOR,
+            MODEL_NAME="kimi-k3",
+            UPSTREAM_ID="pool-b300",
+            PORT=str(cls.port),
+        )
+        cls.process = subprocess.Popen(
+            [sys.executable, os.path.join(os.path.dirname(__file__), "server.py")],
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                cls.request("/health")
+                return
+            except OSError:
+                time.sleep(0.1)
+        cls.process.terminate()
+        raise AssertionError("accelerator pool replica did not start")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.process.terminate()
+        cls.process.wait(timeout=10)
+
+    @classmethod
+    def request(cls, path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", cls.port, timeout=5)
+        if body is None:
+            connection.request("GET", path)
+        else:
+            connection.request(
+                "POST", path, body=json.dumps(body),
+                headers={"content-type": "application/json"},
+            )
+        response = connection.getresponse()
+        payload = json.loads(response.read())
+        connection.close()
+        return response.status, payload
+
+    def test_health_reports_the_accelerator_class(self):
+        status, payload = self.request("/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["accelerator"], self.ACCELERATOR)
+        self.assertEqual(payload["models"], 3)
+
+    def test_catalog_is_limited_to_the_pool(self):
+        status, payload = self.request("/v1/models")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["mock_accelerator"], self.ACCELERATOR)
+        self.assertEqual(
+            sorted(card["id"] for card in payload["data"]),
+            ["deepseek-v4-pro", "glm-5.3", "kimi-k3"],
+        )
+        self.assertTrue(
+            all(card["accelerator"] == self.ACCELERATOR for card in payload["data"])
+        )
+
+    def test_pool_serves_its_own_models(self):
+        status, payload = self.request(
+            "/v1/chat/completions",
+            {"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["mock_accelerator"], self.ACCELERATOR)
+
+    def test_model_from_another_pool_is_refused(self):
+        status, payload = self.request(
+            "/v1/chat/completions",
+            {"model": "qwen3.8-27b", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"]["code"], "model_not_served_here")
+        self.assertIn("h100", payload["error"]["message"])
+
+        status, payload = self.request("/v1/models/bge-m3")
+        self.assertEqual(status, 404)
+
+    def test_pool_without_a_task_says_so(self):
+        status, payload = self.request("/v1/embeddings", {"input": "chunk"})
+        self.assertEqual(status, 400)
+        self.assertIn("no embedding models", payload["error"]["message"])
+
+    def test_omitted_model_uses_a_model_this_pool_serves(self):
+        status, payload = self.request(
+            "/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["model"], "kimi-k3")
+        self.assertEqual(payload["mock_accelerator"], self.ACCELERATOR)
+
+    def test_unknown_model_is_still_reported_as_missing(self):
+        status, payload = self.request(
+            "/v1/chat/completions",
+            {"model": "gpt-imaginary", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"]["code"], "model_not_found")
 
 
 if __name__ == "__main__":

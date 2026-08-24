@@ -6,7 +6,7 @@ ENVOY_CLUSTER := ai-gw-envoy
 AGENT_CLUSTER := ai-gw-agent
 CLUSTERS := $(KUADRANT_CLUSTER) $(ENVOY_CLUSTER) $(AGENT_CLUSTER)
 
-.PHONY: help up down clusters install runtime gateways kserve compare status charts agent-ui test
+.PHONY: help up down clusters install runtime gateways kserve pools pools-down compare status charts agent-ui test
 
 help: ## show targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-10s %s\n",$$1,$$2}'
@@ -43,6 +43,12 @@ gateways: ## create the three Gateway API entry points
 
 kserve: ## deploy the same KServe LLMInferenceService into all three clusters
 	bash scripts/deploy-kserve.sh
+
+pools: ## add one KServe serving pool per accelerator class (B300/H200/H100/L40S)
+	bash scripts/deploy-pools.sh
+
+pools-down: ## remove the accelerator pools, keeping the shared KServe path
+	bash scripts/deploy-pools.sh --delete
 
 compare: ## compare all gateways through the single KServe path
 	bash compare/run-comparison.sh
