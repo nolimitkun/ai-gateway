@@ -1,0 +1,36 @@
+# agentgateway rate limiting. Local limits are counted inside the proxy, so
+# no Redis and no rate limit service are involved; the trade-off is that the
+# budget is per proxy instance and the coarsest local window is an hour, so a
+# daily quota needs the global (external) rate limit service instead.
+#
+# `unit: Tokens` charges the LLM token count of the response, which is the
+# same budget model as Kuadrant's TokenRateLimitPolicy and Envoy AI Gateway's
+# metadata cost, expressed in one field.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: kserve-mock-rate-limit
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+  traffic:
+    rateLimit:
+      conditional:
+        - condition: '"x-rate-limit-probe" in request.headers'
+          policy:
+            local:
+              - requests: 5
+                unit: Minutes
+        - condition: '"x-token-limit-probe" in request.headers'
+          policy:
+            local:
+              - tokens: 100
+                unit: Minutes
+        - condition: '"x-quota-probe" in request.headers'
+          policy:
+            local:
+              - requests: 3
+                unit: Hours

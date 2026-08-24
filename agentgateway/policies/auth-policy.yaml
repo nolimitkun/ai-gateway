@@ -1,0 +1,73 @@
+# agentgateway authentication and authorization for the KServe route.
+#
+# Policies attach to the same HTTPRoute the other two stacks protect. JWT
+# validation is Strict, so an unauthenticated request never reaches the
+# InferencePool. Authorization is CEL over the verified claims: agentgateway
+# has no claim-matching DSL, every rule is an expression.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: kserve-mock-jwt
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      location:
+        header:
+          name: Authorization
+          prefix: "Bearer "
+      providers:
+        - issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+          audiences:
+            - ai-gateway
+          jwks:
+            remote:
+              backendRef:
+                name: keycloak
+                port: 8080
+              jwksPath: /realms/ai-gateway/protocol/openid-connect/certs
+              cacheDuration: 5m
+---
+# Every caller must be a member of model-users. `Require` rules are cumulative,
+# so this and the rule below both have to pass.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: kserve-mock-members
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+  traffic:
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - 'jwt.groups.exists(g, g == "model-users")'
+---
+# The B300 pool is admin-only. Written as a Require rule rather than a Deny
+# rule: a Deny whose expression errors fails open, and the membership test on
+# a missing header would error.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: kserve-mock-big-tier
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+  traffic:
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - '!("x-model-class" in request.headers) || request.headers["x-model-class"] != "b300" || jwt.groups.exists(g, g == "platform-admins")'

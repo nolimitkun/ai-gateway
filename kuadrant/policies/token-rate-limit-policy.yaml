@@ -1,0 +1,40 @@
+# Token-based limiting. Kuadrant reads `usage.total_tokens` from the
+# OpenAI-compatible response and charges that many units to Limitador, so the
+# budget is spent by model output rather than by request count.
+#
+# The probe limit is small enough that two big-tier completions exhaust it.
+apiVersion: kuadrant.io/v1alpha1
+kind: TokenRateLimitPolicy
+metadata:
+  name: kserve-mock
+  namespace: ai-demo
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: kserve-mock
+  limits:
+    token-probe:
+      rates:
+        - limit: 100
+          window: 1m
+      counters:
+        - expression: auth.identity.sub
+      when:
+        - predicate: '"x-token-limit-probe" in request.headers'
+    free-plan-tokens:
+      rates:
+        - limit: 200000
+          window: 24h
+      counters:
+        - expression: auth.identity.sub
+      when:
+        - predicate: 'auth.identity.plan == "free"'
+    gold-plan-tokens:
+      rates:
+        - limit: 2000000
+          window: 24h
+      counters:
+        - expression: auth.identity.sub
+      when:
+        - predicate: 'auth.identity.plan == "gold"'

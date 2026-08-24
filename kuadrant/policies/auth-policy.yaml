@@ -1,0 +1,58 @@
+# Kuadrant authentication and authorization for the KServe route.
+#
+# Authorino verifies the Keycloak access token, then two authorization rules
+# run: every caller must belong to the `model-users` group, and only
+# `platform-admins` may reach the B300 pool. The identity attributes the
+# policy exports are what TokenRateLimitPolicy and RateLimitPolicy count on.
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: kserve-mock
+  namespace: ai-demo
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: kserve-mock
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader:
+            prefix: Bearer
+    authorization:
+      model-users:
+        patternMatching:
+          patterns:
+            - selector: auth.identity.groups
+              operator: incl
+              value: model-users
+      big-tier-is-admin-only:
+        when:
+          - selector: request.headers.x-model-class
+            operator: eq
+            value: b300
+        patternMatching:
+          patterns:
+            - selector: auth.identity.groups
+              operator: incl
+              value: platform-admins
+    response:
+      success:
+        headers:
+          x-auth-user:
+            plain:
+              selector: auth.identity.preferred_username
+          x-auth-plan:
+            plain:
+              selector: auth.identity.plan
+      unauthenticated:
+        code: 401
+        message:
+          value: "a Keycloak access token is required; POST /realms/ai-gateway/protocol/openid-connect/token"
+      unauthorized:
+        code: 403
+        message:
+          value: "the token identity is not allowed to call this model class"

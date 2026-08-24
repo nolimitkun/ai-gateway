@@ -1,0 +1,11 @@
+# Rate limit addon for Envoy Gateway, layered on envoy-gateway.values.yaml.
+# Setting config.envoyGateway.rateLimit makes the controller provision the
+# envoy-ratelimit deployment; the counters live in the Redis from
+# envoy-ai-gateway/policies/redis.yaml.
+config:
+  envoyGateway:
+    rateLimit:
+      backend:
+        type: Redis
+        redis:
+          url: redis.redis-system.svc.cluster.local:6379

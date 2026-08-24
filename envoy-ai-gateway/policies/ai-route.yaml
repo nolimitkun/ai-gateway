@@ -1,0 +1,37 @@
+# Token accounting is an Envoy AI Gateway feature, not a Gateway API one: the
+# AI Gateway ext_proc parses the OpenAI response and writes the token counts
+# into Envoy dynamic metadata, where the rate limit filter can charge them.
+# That only happens for traffic handled by an AIGatewayRoute.
+#
+# The route is pinned to the `ai.local` hostname so it takes precedence for
+# the token probe alone, and the plain kserve-mock HTTPRoute keeps serving
+# every other request unchanged. Both end at the same KServe InferencePool.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: kserve-mock-ai
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  hostnames:
+    - ai.local
+  rules:
+    - matches:
+        - headers:
+            - type: RegularExpression
+              name: x-ai-eg-model
+              value: ".*"
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-mock-inference-pool
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_total_token
+      type: TotalToken
