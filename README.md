@@ -44,17 +44,23 @@ between the three gateways.
 | Provider credentials | Not provided by the compared policy | `BackendSecurityPolicy` | Backend authentication on `AgentgatewayBackend` |
 | MCP routing | Not provided by the compared policy | `MCPRoute` | Native MCP routing with OAuth |
 | Telemetry controls | `TelemetryPolicy` metric labels | `EnvoyProxy` telemetry | `frontend.metrics`, tracing, and access logs |
-| Latest routing sample | 30/30 successful; 2 model pods | 30/30 successful; 2 model pods | 30/30 successful; 2 model pods |
+| Gateway Programmed | Yes | Yes | Yes |
+| `LLMInferenceService` Ready | Yes | Yes | Yes |
+| Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
+| Workload replicas | 2/2 | 2/2 | 2/2 |
+| KServe-owned Deployments, Services, and Pool | 5 | 5 | 5 |
+| Latest routing sample | 30/30 HTTP 200, 2 pods, 0 unknown | 30/30 HTTP 200, 2 pods, 0 unknown | 30/30 HTTP 200, 2 pods, 0 unknown |
 | APIs validated in latest sample | Streaming chat, embeddings, reranking, transcription | Streaming chat, embeddings, reranking, transcription | Streaming chat, embeddings, reranking, transcription |
 | Local chat p50 | 299 ms | 230 ms | 307 ms |
+| Baseline Kuadrant `RateLimitPolicy` Ready | Yes | Not applicable | Not applicable |
 | Latest policy runtime result | Not yet measured; manifests pass offline schema validation | Not yet measured; manifests pass offline schema validation | Not yet measured; manifests pass offline schema validation |
 
 The latest routing sample was recorded on 24 August 2026 against a zero-delay
 Python runtime. It is a regression smoke test, not a production performance
 benchmark. All Gateways were Programmed, all routes were
 Accepted/ResolvedRefs, and every `LLMInferenceService` was Ready with 2/2
-workload replicas. See the
-[raw result](compare/results/comparison-20260824-173720.md).
+workload replicas. The complete historical result is embedded in the matrix so
+the root README remains the repository's only Markdown document.
 
 Kuadrant is a policy control plane, not a proxy. The OpenShift profile combines
 Kuadrant with Istio and Envoy to reproduce the OpenShift shared-Gateway shape;
@@ -391,7 +397,8 @@ unknown fields, wrong types, invalid enum values, and missing required fields.
 - policy readiness, authentication, authorization, rate limit, quota, token
   budget, and CORS when the optional layer is installed.
 
-Results are written to `compare/results/`. Offline schema validation cannot
+Results are written as timestamped text reports in `compare/results/`. Offline
+schema validation cannot
 prove controller acceptance; only the live comparison can do that.
 
 ### Continuous integration
@@ -428,8 +435,44 @@ final job that merges per-stack comparison fragments.
 
 The core desired state is `LLMInferenceService/kserve-mock` with two replicas,
 `model.name: mock-kserve`, `HTTPRoute/kserve-mock`, and a scheduler-managed
-`InferencePool`. See [kserve/README.md](kserve/README.md) for the complete
-fixture and production resource details.
+`InferencePool`.
+
+### KServe resource map
+
+The KServe directory is organized as follows:
+
+| Path | Purpose |
+|---|---|
+| `kserve/manifests/llmisvc.yaml` | Two CPU mock replicas and the complete llm-d scheduler |
+| `kserve/manifests/route.yaml` | Shared `/v1` inference route |
+| `kserve/manifests/cpu-presets.yaml` | Prevents KServe GPU/vLLM presets from merging into the laptop fixture |
+| `kserve/manifests/envoy-inferencepool-rbac.yaml` | Allows Envoy Gateway to watch `InferencePool`; other stacks install equivalent RBAC |
+| `kserve/pools/` | One mock `LLMInferenceService`, route, endpoint picker, and pool per accelerator class |
+| `kserve/overlays/gpu/` | Placement and device requests for the mock pools; not a production runtime |
+| `kserve/production/` | Pinned vLLM runtime and four real task-specific services |
+| `kuadrant/kserve-overlay/` | Shared OpenShift-style Gateway references and trusted endpoint-picker certificate |
+| `kuadrant/pools-overlay/` | OpenShift-profile certificates and TLS policies for accelerator pools |
+| `kserve/values/kserve-llmisvc.values.yaml` | Prevents KServe from replacing gateway-owned API and inference-extension CRDs |
+
+KServe reconciles the shared fixture into:
+
+```text
+LLMInferenceService/kserve-mock
+├── Deployment/kserve-mock-kserve (2 model pods)
+├── Service/kserve-mock-kserve-workload-svc
+├── Deployment/kserve-mock-kserve-router-scheduler
+├── Service/kserve-mock-epp-service
+├── InferencePool/kserve-mock-inference-pool
+└── scheduler ServiceAccount and RBAC
+```
+
+The installation scripts apply Gateway API Inference Extension CRDs before the
+gateway providers, then install KServe and the `LLMInferenceService`. Envoy AI
+Gateway and agentgateway consume KServe's secure endpoint picker directly. The
+OpenShift profile mounts a cert-manager-issued server Secret and adds a
+`BackendTLSPolicy` plus a CA ConfigMap so Istio validates the endpoint picker
+without treating KServe's self-signed `CA:FALSE` leaf certificate as a trust
+anchor.
 
 ## Repository layout
 
