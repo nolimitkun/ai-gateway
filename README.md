@@ -33,6 +33,7 @@ between the three gateways.
 | API keys | Secret-backed `AuthPolicy` `authentication.apiKey` | `SecurityPolicy` `apiKeyAuth` | `traffic.apiKeyAuthentication` |
 | Client mTLS | `AuthPolicy` `authentication.x509` | `ClientTrafficPolicy` | `frontend.tls` |
 | External authorization | `AuthPolicy` HTTP metadata, OPA, or SpiceDB | `SecurityPolicy` `extAuth` | `traffic.extAuth` |
+| External processing (ext_proc) | No policy API; an Istio `EnvoyFilter` patches raw Envoy configuration | `EnvoyExtensionPolicy` `extProc` | `traffic.extProc` |
 | Authorization rules | Pattern matching, CEL, or OPA Rego | Claim/header rules; first match wins | CEL `matchExpressions`; Allow, Deny, or Require |
 | Request rate limits | `RateLimitPolicy` | `BackendTrafficPolicy`, local or global | `traffic.rateLimit`, local or global |
 | Long quota windows | Any window through 24 hours in the same policy | Day, Month, or Year | Local mode stops at Hours; longer windows require global rate limiting |
@@ -110,6 +111,13 @@ make policies
 make compare
 ```
 
+Add the optional semantic routing layer:
+
+```bash
+make semantic-router
+make compare
+```
+
 Useful lifecycle and validation targets:
 
 ```bash
@@ -117,6 +125,7 @@ make status
 make pools
 make pools-down
 make policies-down
+make semantic-router-down
 make test
 make validate
 make agent-ui
@@ -351,6 +360,85 @@ curl "$BASE/v1/chat/completions" \
   -d '{"model":"mock-kserve","messages":[{"role":"user","content":"hello"}]}'
 ```
 
+## Semantic routing layer
+
+`make semantic-router` puts the [vLLM Semantic
+Router](https://github.com/vllm-project/semantic-router) in front of the same
+KServe path, as each gateway's external processor. It is the upstream release
+image, `ghcr.io/vllm-project/semantic-router/extproc:v0.3.0`, deployed
+identically in all three clusters; only the attachment differs, and that is
+what this layer compares.
+
+This layer's manifests and decisions pass the offline checks below, but the
+rows it adds have not yet been filled in by a live run. Run `make
+semantic-router && make compare`, or dispatch the comparison workflow, to
+record them.
+
+A request that names a model is forwarded unchanged, so every other row in the
+comparison is unaffected. A request whose model is `auto` is resolved by the
+router: it reads the prompt, rewrites the body's `model` field, replaces the
+system prompt, and names its choice upstream in `x-selected-model`. The gateway
+then routes the rewritten request down the ordinary `HTTPRoute` and
+`InferencePool`, so the decision is visible in the answer itself.
+
+The decision is reported in both directions, and the comparison measures each
+separately. Upstream, the runtime reports the model and system prompt it was
+handed, which is what proves the rewrite survived the gateway. Downstream, the
+router adds `x-vsr-selected-decision`, `x-vsr-selected-reasoning`, and related
+headers to the response, which is what proves the gateway propagates an
+external processor's response-header mutations back to the client.
+
+```bash
+BASE=http://localhost:8082
+curl "$BASE/v1/chat/completions" -H 'content-type: application/json' \
+  -d '{"model":"auto","messages":[{"role":"user","content":"prove that the square root of two is irrational"}]}'
+
+# -> "model": "kimi-k3", "mock_tier": "big"
+```
+
+| Prompt | Decision | Selected model | Tier |
+|---|---|---|---|
+| Proofs, derivations, step-by-step quantitative work | `deep-reasoning` | `kimi-k3` | Big, B300 |
+| Programming, debugging, refactoring | `code` | `deepseek-v4-flash` | Medium, H200 |
+| Greetings and short conversational turns | `small-talk` | `qwen3.8-27b` | Small, H100 |
+| No decision matched | Default | `mock-kserve` | Fixture, CPU |
+
+### How each gateway attaches it
+
+| Stack | Attachment | Status to check |
+|---|---|---|
+| OpenShift profile | Istio `EnvoyFilter` inserting `envoy.filters.http.ext_proc` into the gateway listener | None; `EnvoyFilter` has no status |
+| Envoy AI Gateway | `EnvoyExtensionPolicy` `extProc` targeting the `HTTPRoute` | `Accepted` |
+| agentgateway | `AgentgatewayPolicy` `traffic.extProc` targeting the `HTTPRoute` | `Accepted` |
+
+The OpenShift profile is the outlier: Kuadrant has no external-processing
+policy and Istio's Gateway API support does not cover ext_proc either, so the
+filter is written in Envoy's own field names and patched into the listener,
+with no controller status to confirm it was accepted. A `DestinationRule`
+disables mesh mTLS toward the router, which otherwise fails the handshake — and
+because the filter fails open, would leave every request silently unrouted. All
+three attachments fail open by design: a router that is down leaves inference
+working with the client's original model.
+
+### Decisions are keyword rules, not the classifier
+
+[semantic-router/config/router-config.yaml](semantic-router/config/router-config.yaml)
+matches decisions with keyword rules, which are regular expressions evaluated
+in-process. That is a deliberate fixture choice with two consequences: the
+router downloads no model weights, so the pod requests 256 MiB and starts
+without waiting on HuggingFace, and the same prompt yields the same decision on
+every run — which is what makes the comparison row meaningful.
+
+Real intent classification uses `domain` conditions instead, backed by the MoM
+classifier models the router fetches from HuggingFace at startup. That profile
+needs roughly 3 GiB of memory and a 10 GiB volume per cluster, and its first
+start waits on the download, so it is not what the three-cluster comparison
+runs. To use it, replace each decision's `keyword` condition with a `domain`
+condition, declare the domains under `routing.signals.domains`, and raise the
+Deployment's resources accordingly; the upstream
+[Helm chart](https://github.com/vllm-project/semantic-router/tree/main/deploy/helm/semantic-router)
+carries a complete example.
+
 ## Deployment targets
 
 Do not install upstream KServe and the OpenShift AI-managed distribution in
@@ -400,6 +488,14 @@ streaming usage, embeddings, reranking, and WAV transcription. `make validate`
 checks repository manifests against vendored structural CRD schemas and reports
 unknown fields, wrong types, invalid enum values, and missing required fields.
 
+The router's decisions are a ConfigMap, so no CRD schema covers them.
+`make validate` therefore also checks them against the catalog they route to:
+every selectable model is a chat model the runtime serves, every decision
+resolves to exactly one keyword rule at a distinct priority, and the three
+prompts `make compare` sends select three different models — read out of the
+comparison script itself, so a changed prompt or keyword fails the check rather
+than quietly reporting the default model as a routing decision.
+
 `make compare` adds live-cluster assertions:
 
 - Gateway Programmed and route Accepted/ResolvedRefs conditions;
@@ -409,7 +505,11 @@ unknown fields, wrong types, invalid enum values, and missing required fields.
 - streaming chat usage, embeddings, reranking, transcription, and diarization;
 - p50 local request latency;
 - policy readiness, authentication, authorization, rate limit, quota, token
-  budget, and CORS when the optional layer is installed.
+  budget, and CORS when the optional policy layer is installed;
+- ext_proc attachment, the model chosen for each of three prompts, the model and
+  system prompt the runtime received, the decision headers returned to the
+  client, and auto-routed p50 latency when the optional semantic routing layer
+  is installed.
 
 Results update the marked rows in this README directly; no separate report is
 created. Offline schema validation cannot prove controller acceptance; only
@@ -423,12 +523,13 @@ repositories:
 | Workflow | Scope | Trigger | Typical duration |
 |---|---|---|---|
 | `.github/workflows/checks.yml` | `make test` and `make validate` | Every push and pull request | About 1 minute |
-| `.github/workflows/comparison.yml` | `make up`, optional policies, and `make compare` | Manual dispatch and Mondays at 06:00 UTC | 45–70 minutes |
+| `.github/workflows/comparison.yml` | `make up`, optional policies, optional semantic router, and `make compare` | Manual dispatch and Mondays at 06:00 UTC | 45–75 minutes |
 
 The full comparison creates all three kind clusters on one runner. It removes
 unused preinstalled toolchains to free disk space and raises inotify limits for
 the three sets of kubelets and controllers. Manual dispatch accepts whether to
-install policies and how many chat requests to sample per gateway. Successful
+install policies, whether to install the semantic router, and how many chat
+requests to sample per gateway. Successful
 results replace the marked comparison rows, are committed to `README.md`, and
 are added to the job summary. Failed runs upload pod, policy, and event
 diagnostics for each cluster.
@@ -500,6 +601,7 @@ agentgateway/              agentgateway resources, policies, values, and charts
 keycloak/                  shared realm, workload, and token route
 kserve/                    controller charts, fixture resources, pools, and production vLLM
 mock-llm/                  deterministic multi-task CPU runtime and tests
+semantic-router/           vLLM Semantic Router workload, decisions, and ext_proc attachments
 scripts/                   installation, deployment, validation, and lifecycle commands
 compare/                   three-gateway comparison and raw results
 ```
@@ -510,6 +612,8 @@ compare/                   three-gateway comparison and raw results
 - [KServe LLMInferenceService architecture](https://kserve.github.io/website/docs/concepts/architecture/control-plane-llmisvc)
 - [KServe LLMInferenceService configuration](https://kserve.github.io/website/docs/model-serving/generative-inference/llmisvc/llmisvc-configuration)
 - [vLLM Docker deployment](https://docs.vllm.ai/en/v0.27.0/deployment/docker/)
+- [vLLM Semantic Router](https://github.com/vllm-project/semantic-router)
+- [Envoy external processing filter](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter)
 - [Kuadrant documentation](https://docs.kuadrant.io/)
 - [OpenShift AI distributed inference](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/deploy_models_using_distributed_inference_with_llm-d/deploying-models-using-distributed-inference_distributed-inference)
 - [OpenShift Gateway API implementation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html-single/ingress_and_load_balancing/ingress_and_load_balancing)

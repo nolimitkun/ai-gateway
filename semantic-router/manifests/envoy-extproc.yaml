@@ -1,0 +1,33 @@
+# Envoy AI Gateway: attach the semantic router with an EnvoyExtensionPolicy.
+#
+# Envoy Gateway has a first-class Gateway API policy for external processing,
+# so the whole attachment is one object with a typed backend reference and a
+# status condition to check. It targets the KServe HTTPRoute rather than the
+# Gateway, which keeps Keycloak's /realms endpoints on the same Gateway out of
+# the router's path -- a token request is not a chat request and has no model
+# to select.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: semantic-router
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+  extProc:
+    - backendRefs:
+        - name: semantic-router
+          port: 50051
+      # Same contract as the other two stacks: a router that is unreachable
+      # leaves the request untouched instead of failing it.
+      failOpen: true
+      messageTimeout: 10s
+      processingMode:
+        allowModeOverride: true
+        request:
+          # The model is chosen from the chat body, so the body is buffered
+          # before the router is called.
+          body: Buffered
+        response: {}
