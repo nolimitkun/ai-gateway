@@ -1,0 +1,71 @@
+# OpenShift profile: attach the semantic router with an Istio EnvoyFilter.
+#
+# This is the one stack with no Gateway API surface for external processing.
+# Kuadrant's policies do authentication, rate limiting, and token budgets, but
+# ext_proc is not among them, and Istio's own Gateway API support does not
+# cover it either -- so the filter is written as raw Envoy configuration and
+# patched into the listener. That is the trade-off this column measures: the
+# capability is available, but only one abstraction level below the other two,
+# with Envoy's own field names and no status condition to check afterwards.
+#
+# The EnvoyFilter must live in the namespace of the workload it patches, which
+# for the shared OpenShift-style Gateway is openshift-ingress.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: semantic-router
+  namespace: openshift-ingress
+spec:
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: openshift-ai-inference
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        # INSERT_FIRST puts the router ahead of Kuadrant's own ext_authz and
+        # rate limit filters, so an unauthenticated request is still rejected
+        # by the policy layer -- the router only rewrites what it is given.
+        operation: INSERT_FIRST
+        value:
+          name: envoy.filters.http.ext_proc
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            # A router that is down must not take the inference path with it:
+            # the request continues unprocessed and keeps its original model.
+            failure_mode_allow: true
+            allow_mode_override: true
+            message_timeout: 10s
+            processing_mode:
+              request_header_mode: SEND
+              response_header_mode: SEND
+              # The decision is made from the chat body, so the body has to be
+              # buffered before the router sees it.
+              request_body_mode: BUFFERED
+              response_body_mode: NONE
+              request_trailer_mode: SKIP
+              response_trailer_mode: SKIP
+            grpc_service:
+              envoy_grpc:
+                cluster_name: outbound|50051||semantic-router.ai-demo.svc.cluster.local
+              timeout: 10s
+---
+# Istio would otherwise offer mTLS to the router, which is not in the mesh and
+# terminates plaintext h2c. Without this the ext_proc calls fail the TLS
+# handshake and -- because the filter fails open -- every request would quietly
+# route as if the router were not installed at all.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: semantic-router
+  namespace: ai-demo
+spec:
+  host: semantic-router.ai-demo.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE

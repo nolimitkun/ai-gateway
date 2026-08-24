@@ -6,7 +6,7 @@ ENVOY_CLUSTER := ai-gw-envoy
 AGENT_CLUSTER := ai-gw-agent
 CLUSTERS := $(KUADRANT_CLUSTER) $(ENVOY_CLUSTER) $(AGENT_CLUSTER)
 
-.PHONY: help up down clusters install runtime gateways kserve pools pools-down policies policies-down keycloak compare status charts agent-ui test validate vllm-production vllm-production-down vllm-validate
+.PHONY: help up down clusters install runtime gateways kserve pools pools-down policies policies-down semantic-router semantic-router-down keycloak compare status charts agent-ui test validate vllm-production vllm-production-down vllm-validate
 
 help: ## show targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-10s %s\n",$$1,$$2}'
@@ -50,6 +50,12 @@ pools: ## add one KServe serving pool per accelerator class (B300/H200/H100/L40S
 pools-down: ## remove the accelerator pools, keeping the shared KServe path
 	bash scripts/deploy-pools.sh --delete
 
+semantic-router: ## route "auto" requests by intent through each gateway's ext_proc API
+	bash scripts/deploy-semantic-router.sh
+
+semantic-router-down: ## remove the semantic router; the KServe path is unchanged
+	bash scripts/deploy-semantic-router.sh --delete
+
 policies: ## add Keycloak auth, authorization, rate limit, quota, and token policies
 	bash scripts/deploy-policies.sh
 
@@ -83,6 +89,7 @@ test: ## test the multi-task mock runtime locally
 
 validate: ## check every manifest against the vendored CRD schemas, offline
 	python3 scripts/validate-policies.py
+	python3 scripts/validate-router-config.py
 
 agent-ui: ## expose agentgateway UI at http://localhost:15000/ui
 	@POD="$$(kubectl --context kind-$(AGENT_CLUSTER) -n ai-demo get pod \

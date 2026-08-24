@@ -1,0 +1,37 @@
+# agentgateway: attach the semantic router with traffic.extProc.
+#
+# agentgateway carries external processing as one field of the same
+# AgentgatewayPolicy that already holds this repository's JWT, authorization,
+# rate limit, and CORS configuration, so the router is attached in the same
+# API and against the same HTTPRoute as every other feature.
+#
+# The processing options are named per phase rather than as one processing
+# mode; the effect matches the other two stacks. FullDuplexStreamed is the
+# agentgateway default for bodies and would leave the router streaming a body
+# it has to see whole, so the request body is explicitly buffered.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: kserve-mock-semantic-router
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+  traffic:
+    extProc:
+      backendRef:
+        name: semantic-router
+        namespace: ai-demo
+        port: 50051
+      # A router that is down must not take the inference path with it.
+      failureMode: FailOpen
+      processingOptions:
+        allowModeOverride: true
+        requestHeaderMode: Send
+        requestBodyMode: Buffered
+        responseHeaderMode: Send
+        responseBodyMode: None
+        requestTrailerMode: Skip
+        responseTrailerMode: Skip

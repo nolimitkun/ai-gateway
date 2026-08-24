@@ -1,0 +1,120 @@
+# The vLLM Semantic Router, deployed identically in all three clusters.
+#
+# This is the upstream release image, not a fixture: the same binary each
+# gateway's ext_proc filter would call in production. What the fixture supplies
+# is the configuration -- keyword decisions over this repository's mock model
+# catalog -- so the router downloads no classifier weights and the routing
+# decision is the same on every run. See semantic-router/config/router-config.yaml.
+#
+# The ConfigMap is created by scripts/deploy-semantic-router.sh from that file,
+# the same way the mock runtime source is published, so one file is the single
+# source of truth for the routing rules and can be linted on its own.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: semantic-router
+  namespace: ai-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: semantic-router
+  namespace: ai-demo
+  labels:
+    app: semantic-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: semantic-router
+  template:
+    metadata:
+      labels:
+        app: semantic-router
+    spec:
+      serviceAccountName: semantic-router
+      containers:
+        - name: semantic-router
+          image: ghcr.io/vllm-project/semantic-router/extproc:v0.3.0
+          imagePullPolicy: IfNotPresent
+          # --secure is deliberately absent: the gRPC listener stays plaintext
+          # h2c, which is what all three gateways are configured to dial.
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: classify-api
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9190
+              protocol: TCP
+          env:
+            - name: LD_LIBRARY_PATH
+              value: /app/lib
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/config.yaml
+              subPath: router-config.yaml
+              readOnly: true
+          # Keyword decisions load no model weights, so the router is listening
+          # in seconds rather than the tens of minutes a classifier build needs.
+          startupProbe:
+            tcpSocket:
+              port: grpc
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: config
+          configMap:
+            name: semantic-router-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: semantic-router
+  namespace: ai-demo
+  labels:
+    app: semantic-router
+spec:
+  type: ClusterIP
+  selector:
+    app: semantic-router
+  ports:
+    # ext_proc is gRPC, so the port has to be advertised as HTTP/2 or the
+    # gateway dials it as HTTP/1.1 and every call fails. Istio reads the port
+    # name, Envoy Gateway and agentgateway read appProtocol; both are set.
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+      appProtocol: grpc
+      protocol: TCP
+    - name: http-classify
+      port: 8080
+      targetPort: classify-api
+      protocol: TCP
+    - name: http-metrics
+      port: 9190
+      targetPort: metrics
+      protocol: TCP

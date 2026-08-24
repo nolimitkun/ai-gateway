@@ -24,6 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Charts that carry the CRDs the manifests below are written against.
 CHARTS = (
     "kuadrant/charts/kuadrant-operator-1.5.2.tgz",
+    "kuadrant/charts/base-1.29.2.tgz",
     "envoy-ai-gateway/charts/ai-gateway-crds-helm-v1.0.0.tgz",
     "envoy-ai-gateway/charts/gateway-helm-v1.8.1.tgz",
     "agentgateway/charts/agentgateway-crds-v1.4.1.tgz",
@@ -43,6 +44,7 @@ MANIFESTS = (
     "kserve/manifests/*.yaml",
     "kserve/pools/*.yaml",
     "kserve/production/*.yaml",
+    "semantic-router/manifests/*.yaml",
 )
 
 
@@ -82,7 +84,14 @@ def load_schemas():
     return schemas
 
 
-def validate(node, schema, path, errors):
+# Istio describes only spec and status in its CRDs, while kubebuilder-generated
+# CRDs also list apiVersion, kind, and metadata. Both are structurally valid, so
+# those three are accepted on the root object whether the schema mentions them
+# or not; nothing else is exempt.
+ROOT_FIELDS = ("apiVersion", "kind", "metadata")
+
+
+def validate(node, schema, path, errors, skip=()):
     if not isinstance(schema, dict):
         return
     if schema.get("x-kubernetes-preserve-unknown-fields") and "properties" not in schema:
@@ -98,6 +107,8 @@ def validate(node, schema, path, errors):
             if name not in node:
                 errors.append(f"{path}: missing required field '{name}'")
         for name, value in node.items():
+            if name in skip:
+                continue
             if name in properties:
                 validate(value, properties[name], f"{path}.{name}", errors)
             elif isinstance(extra, dict):
@@ -151,7 +162,8 @@ def main(argv):
                 continue
             name = document.get("metadata", {}).get("name", "?")
             found = []
-            validate(document, schema, f"{document['kind']}/{name}", found)
+            validate(document, schema, f"{document['kind']}/{name}", found,
+                     skip=ROOT_FIELDS)
             errors.extend(f"{relative}: {problem}" for problem in found)
             checked += 1
     for problem in errors:

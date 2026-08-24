@@ -491,6 +491,22 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length", "0"))
         return self.rfile.read(length)
 
+    def routing_headers(self):
+        """Return the routing headers a semantic router adds to the request.
+
+        The router runs as the gateway's external processor and names the model
+        it chose in x-selected-model; its x-vsr-* decision headers go on the
+        response, which this pod never sees. Echoing what did arrive is what
+        lets the comparison tell a request the router rewrote from one that
+        reached this pod untouched.
+        """
+        return {
+            name.lower(): value
+            for name, value in self.headers.items()
+            if name.lower() == "x-selected-model"
+            or name.lower().startswith("x-vsr-")
+        }
+
     def read_json(self):
         try:
             payload = json.loads(self.read_body() or b"{}")
@@ -690,6 +706,13 @@ class Handler(BaseHTTPRequestHandler):
                 "mock_tier": entry["tier"],
                 "mock_accelerator": ACCELERATOR or "all",
                 "model_accelerator": entry["accelerator"],
+                # A router that replaced the system prompt is visible here even
+                # when it set no headers at all.
+                "mock_system_prompt": any(
+                    isinstance(message, dict) and message.get("role") == "system"
+                    for message in messages
+                ),
+                "mock_routing_headers": self.routing_headers(),
             },
         )
 

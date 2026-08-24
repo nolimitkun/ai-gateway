@@ -17,6 +17,10 @@ on:
         description: also deploy Keycloak and the gateway feature policies
         type: boolean
         default: true
+      router:
+        description: also deploy the vLLM Semantic Router as each gateway's ext_proc
+        type: boolean
+        default: true
       requests:
         description: chat requests sampled per gateway (positive integer)
         type: string
@@ -42,7 +46,7 @@ env:
 jobs:
   comparison:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 170
     steps:
       - uses: actions/checkout@v7
 
@@ -96,6 +100,14 @@ jobs:
         run: make policies
         timeout-minutes: 30
 
+      - name: deploy the semantic router
+        # Keyword decisions load no model weights, so this costs an image pull
+        # and about 256 MiB per cluster rather than the several GiB the
+        # classifier profile would need.
+        if: github.event_name == 'schedule' || inputs.router
+        run: make semantic-router
+        timeout-minutes: 20
+
       - name: run the comparison
         env:
           N: ${{ inputs.requests || '30' }}
@@ -133,6 +145,9 @@ jobs:
               dump kubectl --context "$ctx" get securitypolicy,backendtrafficpolicy,aigatewayroute \
                 -n ai-demo -o yaml
               dump kubectl --context "$ctx" get agentgatewaypolicy -n ai-demo -o yaml
+              dump kubectl --context "$ctx" get envoyfilter -A -o yaml
+              dump kubectl --context "$ctx" get envoyextensionpolicy -n ai-demo -o yaml
+              dump kubectl --context "$ctx" logs -n ai-demo deployment/semantic-router --tail=200
               dump kubectl --context "$ctx" get events -A --sort-by=.lastTimestamp
             } > "diagnostics/$cluster.txt"
           done

@@ -5,7 +5,8 @@
 # quotas, token budgets, and CORS.
 #
 # The feature probes are skipped automatically when `make policies` has not
-# been run, so the routing comparison works on its own.
+# been run, and the semantic routing probes when `make semantic-router` has
+# not been run, so the routing comparison works on its own.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 README="${1:-$ROOT/README.md}"
@@ -15,6 +16,9 @@ EA_BASE=http://localhost:8080
 AG_BASE=http://localhost:8081
 BODY='{"model":"mock-kserve","messages":[{"role":"user","content":"hello through KServe"}]}'
 BIG_BODY='{"model":"kimi-k3","messages":[{"role":"user","content":"hello through KServe"}]}'
+# "auto" is the semantic router's alias for "you pick": the router reads the
+# prompt, rewrites the model, and the answer reports which model served it.
+AUTO_BODY='{"model":"auto","messages":[{"role":"user","content":"prove that the square root of two is irrational"}]}'
 STREAM='{"model":"mock-kserve","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hello through KServe"}]}'
 # Kuadrant and Envoy Gateway key the quota bucket on this value, so a second
 # run on the same day still measures enforcement rather than an already-spent
@@ -107,6 +111,24 @@ AG_TOKEN=""
 KU_FEATURES=no
 EA_FEATURES=no
 AG_FEATURES=no
+KU_ROUTER=no
+EA_ROUTER=no
+AG_ROUTER=no
+
+router_for() {
+  case "$1" in
+    "$KU_BASE") printf '%s' "$KU_ROUTER" ;;
+    "$EA_BASE") printf '%s' "$EA_ROUTER" ;;
+    "$AG_BASE") printf '%s' "$AG_ROUTER" ;;
+  esac
+}
+
+# Without the router, "auto" is simply a model the catalog does not contain,
+# and every auto probe would report the same HTTP 404 in all three columns as
+# if the gateways had failed. Say the layer is absent instead.
+router_guard() {
+  [[ "$(router_for "$1")" == yes ]] || echo "no router"
+}
 
 features_for() {
   case "$1" in
@@ -156,9 +178,9 @@ status_code() {
 }
 
 samples() {
-  local base="$1" raw status rest elapsed body pod
-  for _ in $(seq 1 "$N"); do
-    raw=$(acurl "$base" -sS -m 25 -w '|%{time_total}|%{http_code}' "$base/v1/chat/completions" -H 'content-type: application/json' -d "$BODY")
+  local base="$1" request="${2:-$BODY}" count="${3:-$N}" raw status rest elapsed body pod
+  for _ in $(seq 1 "$count"); do
+    raw=$(acurl "$base" -sS -m 25 -w '|%{time_total}|%{http_code}' "$base/v1/chat/completions" -H 'content-type: application/json' -d "$request")
     status=${raw##*|}
     rest=${raw%|*}
     elapsed=${rest##*|}
@@ -303,6 +325,136 @@ try:
     print("yes" if valid else "no")
 except Exception:
     print("no")'
+}
+
+# --- semantic routing probes ------------------------------------------------
+
+# Ask the router to choose, and report what it chose. The prompts carry the
+# keywords the three decisions match on; the model in the answer is the
+# router's decision as the KServe pod received it, not as the router logged it.
+auto_model() {
+  local base="$1" prompt="$2"
+  { acurl "$base" -sS -m 25 "$base/v1/chat/completions" \
+    -H 'content-type: application/json' \
+    -d "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}]}" || true; } | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("model") or "none")
+except Exception:
+    print("error")'
+}
+
+auto_routing() {
+  local base="$1" guard result
+  guard="$(router_guard "$base")"
+  if [[ -n "$guard" ]]; then
+    echo "$guard"
+    return
+  fi
+  result="$(auto_model "$base" 'prove that the square root of two is irrational')"
+  result+=" / $(auto_model "$base" 'refactor this python function')"
+  result+=" / $(auto_model "$base" 'hello there, good morning')"
+  echo "$result"
+}
+
+# What the model was actually handed. The router names its choice in
+# x-selected-model on the request and replaces the system prompt in the body,
+# so the runtime's own report is what confirms both survived the gateway
+# instead of being dropped between the external processor and the pool.
+auto_upstream() {
+  local base="$1" guard
+  guard="$(router_guard "$base")"
+  if [[ -n "$guard" ]]; then
+    echo "$guard"
+    return
+  fi
+  { acurl "$base" -sS -m 25 "$base/v1/chat/completions" \
+    -H 'content-type: application/json' -d "$AUTO_BODY" || true; } | python3 -c '
+import json, sys
+try:
+    body = json.load(sys.stdin)
+    selected = (body.get("mock_routing_headers") or {}).get("x-selected-model", "no header")
+    prompt = "system prompt" if body.get("mock_system_prompt") else "no system prompt"
+    print(f"{selected}, {prompt}")
+except Exception:
+    print("error")'
+}
+
+# The x-vsr-* decision headers go the other way: the router adds them to the
+# response, so this measures whether each gateway propagates an external
+# processor'"'"'s response header mutations back to the client.
+auto_decision() {
+  local base="$1" guard
+  guard="$(router_guard "$base")"
+  if [[ -n "$guard" ]]; then
+    echo "$guard"
+    return
+  fi
+  { acurl "$base" -sS -D - -o /dev/null -m 25 "$base/v1/chat/completions" \
+    -H 'content-type: application/json' -d "$AUTO_BODY" 2>/dev/null || true; } | python3 -c '
+import sys
+found = {}
+for line in sys.stdin:
+    name, separator, value = line.partition(":")
+    if separator:
+        found[name.strip().lower()] = value.strip()
+decision = found.get("x-vsr-selected-decision") or found.get("x-vsr-selected-model")
+reasoning = found.get("x-vsr-selected-reasoning")
+if not decision:
+    print("no header")
+else:
+    print(decision + (f", reasoning {reasoning}" if reasoning else ""))'
+}
+
+# What the extra hop costs. Ten requests, not the full sample: this measures
+# the router, and the sample size belongs to the routing comparison above.
+auto_p50() {
+  local base="$1" guard
+  guard="$(router_guard "$base")"
+  if [[ -n "$guard" ]]; then
+    echo "$guard"
+    return
+  fi
+  samples "$base" "$AUTO_BODY" 10 | p50
+}
+
+# An attachment object exists before the proxy is using it, and these results
+# are written straight into README.md, so a probe that raced reconciliation
+# would commit "the router did not route" as a measurement. Wait for the data
+# plane to start rewriting -- the only propagation check that covers the
+# status-less EnvoyFilter too. A gateway that never starts still records the
+# honest negative once the window closes.
+wait_for_router() {
+  local base="$1" deadline=$((SECONDS + 90)) selected
+  [[ "$(router_for "$base")" == yes ]] || return 0
+  while ((SECONDS < deadline)); do
+    selected="$(auto_model "$base" 'hello there, good morning')"
+    if [[ "$selected" != none && "$selected" != error ]]; then
+      return 0
+    fi
+    sleep 3
+  done
+  echo "warning: $base did not route an 'auto' request within 90s" >&2
+}
+
+# The OpenShift profile attaches ext_proc as raw Envoy configuration, and an
+# EnvoyFilter carries no status at all, so that column reports presence where
+# the other two report what their controller accepted.
+extproc_attachment() {
+  local context="$1" object="$2" condition="$3" namespace="${4:-ai-demo}"
+  if ! kubectl --context "$context" -n "$namespace" get "$object" >/dev/null 2>&1; then
+    echo absent
+    return
+  fi
+  if [[ -z "$condition" ]]; then
+    echo "present, no status"
+    return
+  fi
+  if [[ "$(policy_condition "$context" "$object" "$condition")" == yes ]]; then
+    echo "$condition"
+  else
+    echo "present, not $condition"
+  fi
 }
 
 # --- gateway feature probes -------------------------------------------------
@@ -465,6 +617,22 @@ else
   echo "no gateway policies found; run 'make policies' for the feature probes" >&2
 fi
 
+# The ext_proc attachment, not the router Deployment: a router that is running
+# but attached to nothing would otherwise make an unrouted "auto" request look
+# like a routing decision the gateway declined to honor.
+KU_ROUTER=$(kubectl --context kind-ai-gw-kuadrant -n openshift-ingress \
+  get envoyfilter/semantic-router >/dev/null 2>&1 && echo yes || echo no)
+EA_ROUTER=$(policies_present kind-ai-gw-envoy envoyextensionpolicy/semantic-router)
+AG_ROUTER=$(policies_present kind-ai-gw-agent agentgatewaypolicy/kserve-mock-semantic-router)
+if [[ "$KU_ROUTER$EA_ROUTER$AG_ROUTER" == *yes* ]]; then
+  echo "semantic router attached; running the auto-routing probes too" >&2
+  wait_for_router "$KU_BASE"
+  wait_for_router "$EA_BASE"
+  wait_for_router "$AG_BASE"
+else
+  echo "no semantic router found; run 'make semantic-router' for the auto-routing probes" >&2
+fi
+
 ku_samples=$(samples "$KU_BASE")
 ea_samples=$(samples "$EA_BASE")
 ag_samples=$(samples "$AG_BASE")
@@ -507,6 +675,11 @@ comparison_rows="$(cat <<EOF
 | Speaker diarization | $(diarization_api "$KU_BASE") | $(diarization_api "$EA_BASE") | $(diarization_api "$AG_BASE") |
 | Local chat p50 | $(printf '%s\n' "$ku_samples" | p50) | $(printf '%s\n' "$ea_samples" | p50) | $(printf '%s\n' "$ag_samples" | p50) |
 | Policy objects reporting ready | $ku_policies | $ea_policies | $ag_policies |
+| Semantic router ext_proc attachment | $(extproc_attachment kind-ai-gw-kuadrant envoyfilter/semantic-router '' openshift-ingress) | $(extproc_attachment kind-ai-gw-envoy envoyextensionpolicy/semantic-router Accepted) | $(extproc_attachment kind-ai-gw-agent agentgatewaypolicy/kserve-mock-semantic-router Accepted) |
+| Auto model selection: reasoning / code / chat | $(auto_routing "$KU_BASE") | $(auto_routing "$EA_BASE") | $(auto_routing "$AG_BASE") |
+| Model and prompt the runtime received | $(auto_upstream "$KU_BASE") | $(auto_upstream "$EA_BASE") | $(auto_upstream "$AG_BASE") |
+| Decision headers returned to the client | $(auto_decision "$KU_BASE") | $(auto_decision "$EA_BASE") | $(auto_decision "$AG_BASE") |
+| Auto-routed chat p50 | $(auto_p50 "$KU_BASE") | $(auto_p50 "$EA_BASE") | $(auto_p50 "$AG_BASE") |
 | Keycloak token issuance | $(token_issuance "$KU_BASE") | $(token_issuance "$EA_BASE") | $(token_issuance "$AG_BASE") |
 | Authentication: anonymous / forged / valid | $(authentication_probe "$KU_BASE") | $(authentication_probe "$EA_BASE") | $(authentication_probe "$AG_BASE") |
 | Authorization: guest / non-admin B300 / admin B300 | $(authorization_probe "$KU_BASE") | $(authorization_probe "$EA_BASE") | $(authorization_probe "$AG_BASE") |

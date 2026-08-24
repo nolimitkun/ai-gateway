@@ -50,6 +50,19 @@ class RuntimeTest(unittest.TestCase):
     def post_json(self, path, payload):
         return self.request(path, json.dumps(payload))
 
+    def post_json_with_headers(self, path, payload, headers):
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_address[1], timeout=5
+        )
+        connection.request(
+            "POST", path, body=json.dumps(payload),
+            headers={"content-type": "application/json", **headers},
+        )
+        response = connection.getresponse()
+        body = json.loads(response.read())
+        connection.close()
+        return response.status, body
+
     def get(self, path):
         connection = http.client.HTTPConnection(
             "127.0.0.1", self.server.server_address[1], timeout=5
@@ -266,6 +279,47 @@ class RuntimeTest(unittest.TestCase):
             self.assertEqual(payload["mock_tier"], tier)
             self.assertEqual(payload["usage"]["completion_tokens"], completion)
             self.assertIn(tier, payload["choices"][0]["message"]["content"])
+
+    def test_router_decision_headers_reach_the_model(self):
+        status, payload = self.post_json_with_headers(
+            "/v1/chat/completions",
+            {"model": "kimi-k3", "messages": [{"role": "user", "content": "prove it"}]},
+            {
+                "x-selected-model": "kimi-k3",
+                "x-vsr-skip-processing": "false",
+                "x-model-class": "b300",
+            },
+        )
+        self.assertEqual(status, 200)
+        # Only the router's own headers are reported: an echo of every header
+        # would say nothing about whether the router ran.
+        self.assertEqual(
+            payload["mock_routing_headers"],
+            {"x-selected-model": "kimi-k3", "x-vsr-skip-processing": "false"},
+        )
+
+    def test_a_request_no_router_touched_reports_no_decision(self):
+        status, payload = self.post_json(
+            "/v1/chat/completions",
+            {"model": "mock-kserve", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["mock_routing_headers"], {})
+        self.assertFalse(payload["mock_system_prompt"])
+
+    def test_an_injected_system_prompt_is_reported(self):
+        status, payload = self.post_json(
+            "/v1/chat/completions",
+            {
+                "model": "kimi-k3",
+                "messages": [
+                    {"role": "system", "content": "Work step by step."},
+                    {"role": "user", "content": "prove it"},
+                ],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["mock_system_prompt"])
 
     def test_max_tokens_beyond_the_model_limit_is_rejected(self):
         status, payload = self.post_json(
