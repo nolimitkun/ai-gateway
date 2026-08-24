@@ -1,0 +1,82 @@
+# Request rate limits, per-plan daily quotas, and the token budget, all as
+# Envoy Gateway global rate limit rules counted in Redis.
+#
+# Every bucket is keyed by the x-user-id header that the SecurityPolicy copies
+# out of the Keycloak token. The two probe rules are selected by an opt-in
+# header so a comparison run can exhaust them without spending the quota that
+# ordinary traffic shares.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: kserve-mock
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  rateLimit:
+    type: Global
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                - name: x-rate-limit-probe
+                  type: Exact
+                  value: "true"
+                - name: x-user-id
+                  type: Distinct
+          limit:
+            requests: 5
+            unit: Minute
+        # Distinct on the probe header gives every comparison run its own
+        # daily bucket, so a second run on the same day still measures
+        # enforcement instead of reporting an already-spent quota.
+        - clientSelectors:
+            - headers:
+                - name: x-quota-probe
+                  type: Distinct
+                - name: x-user-id
+                  type: Distinct
+          limit:
+            requests: 3
+            unit: Day
+        - clientSelectors:
+            - headers:
+                - name: x-auth-plan
+                  type: Exact
+                  value: free
+                - name: x-user-id
+                  type: Distinct
+          limit:
+            requests: 2000
+            unit: Day
+        - clientSelectors:
+            - headers:
+                - name: x-auth-plan
+                  type: Exact
+                  value: gold
+                - name: x-user-id
+                  type: Distinct
+          limit:
+            requests: 20000
+            unit: Day
+        # Token budget. The request itself costs nothing; the response is
+        # charged the total token count the AI Gateway extracted, so a big
+        # model spends the budget four times faster than a small one.
+        - clientSelectors:
+            - headers:
+                - name: x-user-id
+                  type: Distinct
+          limit:
+            requests: 100
+            unit: Minute
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_total_token

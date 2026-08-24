@@ -1,0 +1,81 @@
+# Envoy Gateway authentication and authorization for the KServe routes.
+#
+# The policy targets the routes rather than the Gateway so that Keycloak's own
+# /realms endpoints, which share the Gateway, stay reachable without a token.
+# Both inference routes are listed: kserve-mock is this repository's own
+# HTTPRoute, and kserve-mock-ai is the one the AI Gateway controller generates
+# for the AIGatewayRoute, under the same name and namespace. Without the
+# second reference the ai.local hostname would reach the InferencePool with no
+# token at all.
+#
+# claimToHeaders turns the verified identity into request headers, which is
+# how the rate limit and quota buckets below get a per-user key: Envoy's rate
+# limit descriptors match on headers, not on claims.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: kserve-mock
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock-ai
+  jwt:
+    providers:
+      - name: keycloak
+        issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        audiences:
+          - ai-gateway
+        remoteJWKS:
+          uri: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway/protocol/openid-connect/certs
+          cacheDuration: 5m
+        claimToHeaders:
+          - claim: preferred_username
+            header: x-user-id
+          - claim: plan
+            header: x-auth-plan
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: admins-reach-every-model-class
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: groups
+                valueType: StringArray
+                values:
+                  - platform-admins
+      - name: big-tier-is-admin-only
+        action: Deny
+        principal:
+          headers:
+            - name: x-model-class
+              values:
+                - b300
+      - name: model-users
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: groups
+                valueType: StringArray
+                values:
+                  - model-users
+  cors:
+    allowOrigins:
+      - "https://console.example.com"
+    allowMethods:
+      - GET
+      - POST
+      - OPTIONS
+    allowHeaders:
+      - authorization
+      - content-type
+      - x-model-class

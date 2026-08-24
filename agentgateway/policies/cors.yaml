@@ -1,0 +1,24 @@
+# CORS is a traffic policy here rather than a security policy; the comparison
+# sends the same preflight to all three gateways.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: kserve-mock-cors
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+  traffic:
+    cors:
+      allowOrigins:
+        - "https://console.example.com"
+      allowMethods:
+        - GET
+        - POST
+        - OPTIONS
+      allowHeaders:
+        - authorization
+        - content-type
+        - x-model-class

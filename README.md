@@ -2,7 +2,9 @@
 
 This repository runs one KServe `LLMInferenceService` through three Gateway API
 stacks and compares chat completions, embeddings, reranking, and speech-to-text
-over the resulting data path:
+over the resulting data path — and, with `make policies`, the gateway features
+layered on that path: Keycloak authentication, group authorization, request
+rate limiting, quotas, and token budgets.
 
 | Stack | Pinned version | Local endpoint |
 |---|---:|---|
@@ -10,6 +12,7 @@ over the resulting data path:
 | Envoy AI Gateway | Envoy AI Gateway 1.0.0 / Envoy Gateway 1.8.1 | <http://localhost:8080> |
 | agentgateway | agentgateway 1.4.1 | <http://localhost:8081> |
 | shared model control plane | KServe 0.20.0 | one installation per cluster |
+| shared identity provider | Keycloak 26.4.0 | one per cluster, `/realms` on the same endpoint |
 
 There is only one inference path in the repository. KServe owns the workload,
 Service, llm-d endpoint picker, and `InferencePool`; each gateway receives the
@@ -20,7 +23,8 @@ Kuadrant is not itself a proxy. The OpenShift profile approximates OpenShift
 AI with Connectivity Link by combining Kuadrant policy, an Istio Gateway API
 control plane, an Envoy gateway proxy, and a shared
 `Gateway/openshift-ai-inference` in `openshift-ingress`. It attaches a
-`RateLimitPolicy` to the KServe route.
+`RateLimitPolicy` to the KServe route, and `make policies` adds the
+`AuthPolicy` and `TokenRateLimitPolicy` that complete the feature comparison.
 
 ## Quick start
 
@@ -28,6 +32,13 @@ Prerequisites: Docker, kind, kubectl, Helm, curl, and Python 3.
 
 ```bash
 make up
+make compare
+```
+
+Add the security and traffic features, then compare again:
+
+```bash
+make policies
 make compare
 ```
 
@@ -238,12 +249,156 @@ make pools        # add the four accelerator pools to all three clusters
 make pools-down   # remove them; the shared KServe path stays up
 ```
 
+## Gateway features
+
+Routing is only part of what a gateway is bought for. `make policies` layers
+the security and traffic features onto the same KServe path, in each stack's
+own API, and `make compare` then measures them side by side:
+
+```bash
+make policies        # Keycloak + auth, authorization, rate limit, quota, tokens
+make compare         # the feature rows are filled in automatically
+make policies-down   # remove them; the KServe path is open again
+```
+
+`make up` deliberately leaves the data path unauthenticated so the routing
+comparison measures routing alone. The feature layer is opt-in for that
+reason, and `make compare` detects which state the clusters are in.
+
+### Identity
+
+Each cluster runs its own Keycloak with the `ai-gateway` realm from
+[keycloak/realm](keycloak/realm/ai-gateway-realm.json). Token issuance travels
+the same gateway as inference traffic, so no extra host port is needed, and
+the issuer is pinned to the in-cluster Service URL — the gateway has to resolve
+it and its JWKS from inside the cluster:
+
+```bash
+BASE=http://localhost:8082
+TOKEN=$(curl -sS "$BASE/realms/ai-gateway/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=ai-gateway-cli \
+  -d username=alice -d password=alice |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+curl "$BASE/v1/chat/completions" \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"model":"mock-kserve","messages":[{"role":"user","content":"hello"}]}'
+```
+
+The realm carries three users, which is what makes an authorization result
+readable from a status code alone:
+
+| User | Password | Groups | Plan claim | Expected |
+|---|---|---|---|---|
+| `alice` | `alice` | `platform-admins`, `model-users` | `gold` | every model class |
+| `bob` | `bob` | `model-users` | `free` | everything except the B300 class |
+| `mallory` | `mallory` | `guests` | `free` | HTTP 403 everywhere |
+
+Group membership, the plan, and an `ai-gateway` audience are added by a
+dedicated client scope, so every gateway authorizes on the same claims.
+
+### What each policy set enforces
+
+The three stacks are configured to the same behavior:
+
+- authentication — a valid Keycloak access token is required on `/v1`;
+  anonymous and forged tokens get HTTP 401;
+- authorization — membership of `model-users` is required, and the B300 model
+  class (`x-model-class: b300`) additionally requires `platform-admins`, so a
+  legitimate user still gets HTTP 403 on hardware they are not entitled to;
+- request rate limiting — 5 requests per minute;
+- quota — 3 requests per long window, per identity;
+- token budget — 100 LLM tokens per minute, charged from the response's
+  `usage.total_tokens` rather than from the request count, so one big-tier
+  completion costs four times what a small one does;
+- CORS — a preflight for `https://console.example.com`.
+
+The rate limit, quota, and token budgets are selected by opt-in request
+headers (`x-rate-limit-probe`, `x-quota-probe`, `x-token-limit-probe`).
+Ordinary traffic keeps the wide limits, so one comparison run can exhaust a
+budget and measure enforcement without spending the quota that the latency
+sample shares. Kuadrant and Envoy Gateway additionally key the quota bucket on
+the probe header's value, so each run starts from a fresh daily quota;
+agentgateway's local counters take no key, so its quota bucket is shared by
+every run inside the window and the comparison labels that column accordingly.
+
+The probes run when the policy objects are present, not merely when Keycloak
+answers — `make keycloak` on its own would otherwise make an open path look
+enforced.
+
+### The same job in three APIs
+
+| Feature | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
+|---|---|---|---|
+| JWT / OIDC authentication | `AuthPolicy` `authentication.jwt` | `SecurityPolicy` `jwt.providers` | `AgentgatewayPolicy` `traffic.jwtAuthentication` |
+| browser login flow | `OIDCPolicy` | `SecurityPolicy` `oidc` | MCP OAuth metadata, Keycloak preset |
+| API key authentication | `AuthPolicy` `authentication.apiKey`, Secret-backed | `SecurityPolicy` `apiKeyAuth` | `traffic.apiKeyAuthentication` |
+| mTLS client identity | `AuthPolicy` `authentication.x509` | `ClientTrafficPolicy` | `frontend.tls` |
+| external authorization | `AuthPolicy` `metadata.http`, OPA, SpiceDB | `SecurityPolicy` `extAuth` | `traffic.extAuth` |
+| authorization rules | pattern matching, CEL, OPA Rego | claim and header rules, first match wins | CEL `matchExpressions`, Allow/Deny/Require |
+| request rate limiting | `RateLimitPolicy` | `BackendTrafficPolicy` global or local | `traffic.rateLimit.local` or global |
+| quota windows | any window up to `24h` in the same policy | `unit: Day`, `Month`, `Year` | local limits stop at `Hours` |
+| token budgets | `TokenRateLimitPolicy` | `llmRequestCosts` plus a metadata cost | `unit: Tokens` on a descriptor |
+| counter storage | Limitador, installed by the operator | external Redis and the rate limit service | in-process, for local limits |
+| per-identity buckets | CEL counters over the auth identity | descriptors over headers | descriptors over CEL, global mode only |
+| LLM request shaping | none | `AIGatewayRoute` body and header mutation | `backend.ai` aliases, prompt prepend/append, caching |
+| prompt guardrails | none | none | `backend.ai.promptGuard` |
+| provider credentials | none | `BackendSecurityPolicy` | backend auth on `AgentgatewayBackend` |
+| MCP routing | none | `MCPRoute` | native MCP support with OAuth |
+| telemetry controls | `TelemetryPolicy` metric labels | `EnvoyProxy` telemetry | `frontend.metrics`, `tracing`, `accessLog` |
+
+Three differences are worth calling out, because they change what the stack
+costs to run rather than what it can express:
+
+- **Where counters live.** Kuadrant ships Limitador with the operator, so
+  rate limits, quotas, and token budgets work as soon as a policy is applied.
+  Envoy Gateway's global rate limiting needs an external Redis and the rate
+  limit service, which `make policies` deploys and wires up through
+  [envoy-gateway.ratelimit.values.yaml](envoy-ai-gateway/values/envoy-gateway.ratelimit.values.yaml).
+  agentgateway counts local limits inside the proxy with no dependency at all,
+  at the cost of the budget being per proxy instance.
+- **How long a window can be.** A daily quota is one field for Kuadrant and
+  Envoy Gateway. agentgateway's local limits stop at hours and take no
+  descriptor, so both a longer window and a per-identity bucket need the
+  global rate limit service; the comparison configures an hourly window for
+  that column and reports what it measured.
+- **Where token counts come from.** Kuadrant parses `usage.total_tokens` out
+  of the OpenAI-compatible response on the ordinary route. agentgateway takes
+  a `unit: Tokens` descriptor. Envoy AI Gateway extracts token counts in its
+  ext_proc, which only runs for traffic on an `AIGatewayRoute` — so this
+  repository adds one, pinned to the `ai.local` hostname, alongside the plain
+  `HTTPRoute` that carries everything else. Both end at the same
+  `InferencePool`, and the `SecurityPolicy` targets both: the AI Gateway
+  controller generates its `HTTPRoute` under the AIGatewayRoute's own name, so
+  the second target keeps `ai.local` from being an unauthenticated way in.
+
+Both policy sets attach to the same `HTTPRoute/kserve-mock` the routing
+comparison already uses, so the feature layer measures the gateways rather
+than three different topologies.
+
+### Validating the policies without a cluster
+
+Every policy field is described by a CustomResourceDefinition inside the Helm
+charts already vendored here, so the manifests can be checked offline:
+
+```bash
+make validate
+```
+
+That walks the structural schemas and reports unknown fields, wrong types,
+bad enum values, and missing required fields for every manifest in the
+repository. It is a schema check, not a deployment check: it cannot tell you
+whether a policy is *accepted* by a running controller. `make compare` is what
+answers that.
+
 Useful targets:
 
 ```bash
 make status
 make compare
 make test
+make validate
 make agent-ui
 make down
 ```
@@ -303,7 +458,9 @@ guide:
   `Gateway/openshift-ai-inference` in `openshift-ingress`;
 - bare-metal clusters need an external entry point for the Gateway Service,
   such as MetalLB;
-- authentication must be configured for the inference endpoint;
+- authentication must be configured for the inference endpoint; the
+  `AuthPolicy` in [kuadrant/policies](kuadrant/policies) is the shape
+  Connectivity Link uses for that;
 - LeaderWorkerSet is optional for ordinary deployments and is required when a
   server's tensor, pipeline, or data parallelism spans more than eight
   accelerators.
@@ -332,7 +489,7 @@ flowchart LR
   CLIENT["OpenAI-compatible client"]
 
   subgraph Gateways["Gateway stack (one per cluster)"]
-    KU["Kuadrant policies<br/>RateLimitPolicy"]
+    KU["Kuadrant policies<br/>RateLimitPolicy + AuthPolicy<br/>+ TokenRateLimitPolicy"]
     KUOS["OpenShift profile<br/>Istio control plane + Envoy proxy"]
     EAIG["Envoy AI Gateway<br/>without Kuadrant policy"]
     AG["agentgateway<br/>controller + Rust data plane"]
@@ -386,6 +543,10 @@ The repository declares only the portable resources needed around KServe:
 | repository | `LLMInferenceService/kserve-mock` | desired model, workload, replicas, router, and scheduler |
 | repository | two `LLMInferenceServiceConfig` objects | replace GPU/vLLM defaults with the complete CPU fixture |
 | repository, Kuadrant cluster only | `RateLimitPolicy/kserve-mock` | proves Kuadrant policy attachment without constraining the sample |
+| repository, feature layer | Keycloak `Deployment`, `Service`, realm `ConfigMap`, and `HTTPRoute` | issues the access tokens every gateway validates |
+| repository, feature layer, Kuadrant cluster | `AuthPolicy`, `TokenRateLimitPolicy`, and a wider `RateLimitPolicy` | Keycloak authentication, group authorization, quotas, and token budgets |
+| repository, feature layer, Envoy cluster | `SecurityPolicy`, `BackendTrafficPolicy`, `AIGatewayRoute`, and Redis | the same features through Envoy Gateway and the AI Gateway ext_proc |
+| repository, feature layer, agentgateway cluster | five `AgentgatewayPolicy` objects | the same features as JWT, CEL authorization, rate limit, and CORS policies |
 | repository, Kuadrant cluster only | `Gateway/openshift-ai-inference` | reproduces the OpenShift shared-Gateway name and namespace |
 | repository, Kuadrant cluster only | Kustomize overlay | changes the route and `LLMInferenceService` Gateway references to `openshift-ingress` |
 | repository, Kuadrant cluster only | cert-manager `Issuer` / `Certificate` objects | issue a private CA and DNS-valid server certificate for the KServe endpoint picker |
@@ -455,7 +616,17 @@ router:
 - multipart speech-to-text upload and response handling;
 - speaker diarization with consistent segment and speaker labels;
 - local p50 request latency;
-- Kuadrant `RateLimitPolicy` readiness.
+- how many policy objects each stack reports ready.
+
+With `make policies` applied it also measures, on the same path:
+
+- Keycloak token issuance through the gateway;
+- authentication: anonymous, forged, and valid credentials;
+- authorization: a non-member, a member reaching a restricted model class, and
+  an administrator reaching the same class;
+- the request number at which the rate limit, the quota, and the token budget
+  each return HTTP 429;
+- whether a CORS preflight is answered.
 
 Raw Markdown results are written to `compare/results/`. The latency value is a
 local smoke-test against a zero-delay Python runtime. It is useful for catching
@@ -485,6 +656,12 @@ All Gateways were Programmed, all routes were Accepted/ResolvedRefs, and all
 `LLMInferenceService` objects were Ready with 2/2 workload replicas. See the
 [raw comparison result](compare/results/comparison-20260824-173720.md).
 
+That run predates the feature layer, so it carries no authentication,
+authorization, rate limit, quota, or token rows. The policy manifests and
+`make policies` have been checked against the vendored CRD schemas with
+`make validate`, not yet against a running cluster; run `make policies &&
+make compare` to fill those rows in.
+
 ## Why three clusters
 
 The gateway charts own cluster-scoped Gateway API and extension CRDs on
@@ -494,16 +671,20 @@ upgrading another stack's CRDs and makes teardown deterministic.
 ## Repository layout
 
 ```text
-clusters/             three kind cluster definitions
-kuadrant/             OpenShift-style Gateway overlay, Istio provider, and Kuadrant policy
-envoy-ai-gateway/     pinned charts, values, and Gateway
-agentgateway/         pinned charts, values, and Gateway
-kserve/               controller charts, LLMInferenceService, route, and presets
-kserve/pools/         one serving pool per accelerator class
-kserve/overlays/gpu/  accelerator placement for those pools on a GPU cluster
-mock-llm/              deterministic multi-task CPU runtime and tests
-scripts/               install and deployment orchestration
-compare/               single three-gateway KServe comparison and raw results
+clusters/                  three kind cluster definitions
+kuadrant/                  OpenShift-style Gateway overlay, Istio provider, and Kuadrant policy
+kuadrant/policies/         AuthPolicy, RateLimitPolicy, and TokenRateLimitPolicy
+envoy-ai-gateway/          pinned charts, values, and Gateway
+envoy-ai-gateway/policies/ SecurityPolicy, AIGatewayRoute, BackendTrafficPolicy, and Redis
+agentgateway/              pinned charts, values, and Gateway
+agentgateway/policies/     JWT, authorization, rate limit, and CORS policies
+keycloak/                  shared realm, workload, and token route
+kserve/                    controller charts, LLMInferenceService, route, and presets
+kserve/pools/              one serving pool per accelerator class
+kserve/overlays/gpu/       accelerator placement for those pools on a GPU cluster
+mock-llm/                  deterministic multi-task CPU runtime and tests
+scripts/                   install and deployment orchestration
+compare/                   single three-gateway KServe comparison and raw results
 ```
 
 ## Production model

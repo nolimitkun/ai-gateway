@@ -6,7 +6,7 @@ ENVOY_CLUSTER := ai-gw-envoy
 AGENT_CLUSTER := ai-gw-agent
 CLUSTERS := $(KUADRANT_CLUSTER) $(ENVOY_CLUSTER) $(AGENT_CLUSTER)
 
-.PHONY: help up down clusters install runtime gateways kserve pools pools-down compare status charts agent-ui test
+.PHONY: help up down clusters install runtime gateways kserve pools pools-down policies policies-down keycloak compare status charts agent-ui test validate
 
 help: ## show targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-10s %s\n",$$1,$$2}'
@@ -50,11 +50,23 @@ pools: ## add one KServe serving pool per accelerator class (B300/H200/H100/L40S
 pools-down: ## remove the accelerator pools, keeping the shared KServe path
 	bash scripts/deploy-pools.sh --delete
 
+policies: ## add Keycloak auth, authorization, rate limit, quota, and token policies
+	bash scripts/deploy-policies.sh
+
+policies-down: ## remove the gateway feature policies and Keycloak
+	bash scripts/deploy-policies.sh --delete
+
+keycloak: ## install only the shared Keycloak realm in all three clusters
+	bash scripts/install-keycloak.sh
+
 compare: ## compare all gateways through the single KServe path
 	bash compare/run-comparison.sh
 
 test: ## test the multi-task mock runtime locally
 	python3 -m unittest discover -s mock-llm -p 'test_*.py' -v
+
+validate: ## check every manifest against the vendored CRD schemas, offline
+	python3 scripts/validate-policies.py
 
 agent-ui: ## expose agentgateway UI at http://localhost:15000/ui
 	@POD="$$(kubectl --context kind-$(AGENT_CLUSTER) -n ai-demo get pod \
