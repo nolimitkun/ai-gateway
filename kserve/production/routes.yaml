@@ -1,0 +1,67 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vllm-chat
+  namespace: ai-demo
+spec:
+  parentRefs: [{name: ai-gateway}]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+          headers: [{name: x-model-service, value: chat}]
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-chat-inference-pool
+      timeouts: {request: 300s}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vllm-embedding
+  namespace: ai-demo
+spec:
+  parentRefs: [{name: ai-gateway}]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+          headers: [{name: x-model-service, value: embedding}]
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-embedding-inference-pool
+      timeouts: {request: 300s}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vllm-rerank
+  namespace: ai-demo
+spec:
+  parentRefs: [{name: ai-gateway}]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+          headers: [{name: x-model-service, value: rerank}]
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-rerank-inference-pool
+      timeouts: {request: 300s}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vllm-transcription
+  namespace: ai-demo
+spec:
+  parentRefs: [{name: ai-gateway}]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+          headers: [{name: x-model-service, value: transcription}]
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-transcription-inference-pool
+      timeouts: {request: 300s}

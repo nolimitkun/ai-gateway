@@ -45,6 +45,43 @@ make compare
 `make up` creates three kind clusters. The first run downloads container images
 but all Helm charts are pinned and vendored in the repository.
 
+### Production vLLM
+
+The laptop path remains a deterministic CPU fixture. A separate production
+Kustomize package in `kserve/production/` runs real models with the official
+[`vllm/vllm-openai:v0.27.0` image](https://docs.vllm.ai/en/v0.27.0/deployment/docker/).
+It deliberately creates one
+`LLMInferenceService` per model/task instead of pretending the combined mock
+process is a deployable vLLM topology:
+
+| Route header | Model | vLLM API | Reference GPU |
+|---|---|---|---|
+| `x-model-service: chat` | `Qwen/Qwen3-8B` | chat completions and models | H100 |
+| `x-model-service: embedding` | `Qwen/Qwen3-Embedding-8B` | embeddings | H100 |
+| `x-model-service: rerank` | `BAAI/bge-reranker-v2-m3` | rerank | L40S |
+| `x-model-service: transcription` | `openai/whisper-large-v3-turbo` | audio transcriptions | L40S |
+
+The runtime has `/health` probes, an in-memory `/dev/shm`, writable vLLM/HF
+caches, non-root UID 2000, equal GPU requests and limits, storage initialization,
+and the same KServe `InferencePool`/endpoint-picker path as the mock. The vLLM
+version is pinned rather than using `latest`; 0.27.0 includes the fix for the
+cross-user response leak in
+[GHSA-7m6h-x95x-82q5](https://github.com/vllm-project/vllm/security/advisories/GHSA-7m6h-x95x-82q5).
+
+Deploy only to a KServe 0.20 cluster with NVIDIA GPU nodes and the existing
+`ai-demo/ai-gateway`:
+
+```bash
+make vllm-production VLLM_CONTEXT=my-gpu-context
+make vllm-validate VLLM_BASE_URL=https://gateway.example.com
+```
+
+The production validator exercises the exact API subset shared with the mock:
+model listing, non-streaming and streaming chat (including opt-in usage),
+embeddings, reranking, and a valid WAV transcription upload. GPU product labels,
+model sizes, credentials, and replica counts are reference defaults and should
+be overlaid for the target cluster.
+
 For the OpenShift profile, installation order matters:
 
 1. install the core Gateway API and Inference Extension CRDs;
@@ -80,7 +117,7 @@ The shared CPU runtime exposes five deterministic APIs:
 | chat | `POST /v1/chat/completions` | OpenAI JSON, including streaming | identifies the selected KServe pod and returns tier-dependent usage |
 | embeddings | `POST /v1/embeddings` | OpenAI JSON with string or string-array `input` | returns normalized, deterministic vectors at the model's dimensionality |
 | reranking | `POST /v1/rerank` | JSON with `query`, `documents`, and optional `top_n` | ranks documents by deterministic token overlap |
-| speech-to-text | `POST /v1/audio/transcriptions` | OpenAI-style multipart `file` and `model` fields, plus `response_format`, `diarization`, and `num_speakers` | returns a deterministic transcript, timestamped segments, and speaker turns |
+| speech-to-text | `POST /v1/audio/transcriptions` | vLLM/OpenAI multipart `file`, `model`, and `response_format`; mock-only `diarization` and `num_speakers` extensions | returns a deterministic transcript, timestamped segments, and optional speaker turns |
 
 Use any of the three gateway base URLs with the same requests:
 
@@ -682,6 +719,7 @@ keycloak/                  shared realm, workload, and token route
 kserve/                    controller charts, LLMInferenceService, route, and presets
 kserve/pools/              one serving pool per accelerator class
 kserve/overlays/gpu/       accelerator placement for those pools on a GPU cluster
+kserve/production/         pinned vLLM runtime, task-specific GPU services, and routes
 mock-llm/                  deterministic multi-task CPU runtime and tests
 scripts/                   install and deployment orchestration
 compare/                   single three-gateway KServe comparison and raw results
@@ -694,13 +732,11 @@ server from a ConfigMap. The catalog is a fixture as well: one process answers
 for every model identifier it advertises. Serving chat, embeddings, reranking,
 and STT from one
 `LLMInferenceService` is deliberately a gateway integration fixture, not a
-production model topology. For production, deploy a model runtime suited to
-each task, give each workload its own scaling and accelerator profile, and
-route the corresponding API to that backend. `make pools` and
-`kserve/overlays/gpu` show that split: one `LLMInferenceService` per
-accelerator class, each with its own endpoint picker, pool, and route. For an LLM, restore the KServe
-vLLM runtime preset, GPU resources, storage initialization, and telemetry-aware
-scheduler plugins.
+production model topology. For production, `kserve/production` provides one
+pinned vLLM `LLMInferenceService` per task/model, each with its own scaling and
+accelerator profile, endpoint picker, pool, and route. `make pools` and
+`kserve/overlays/gpu` remain mock routing and placement fixtures; they are not
+production model workloads.
 
 References:
 

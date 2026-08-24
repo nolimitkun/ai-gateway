@@ -6,7 +6,7 @@ ENVOY_CLUSTER := ai-gw-envoy
 AGENT_CLUSTER := ai-gw-agent
 CLUSTERS := $(KUADRANT_CLUSTER) $(ENVOY_CLUSTER) $(AGENT_CLUSTER)
 
-.PHONY: help up down clusters install runtime gateways kserve pools pools-down policies policies-down keycloak compare status charts agent-ui test validate
+.PHONY: help up down clusters install runtime gateways kserve pools pools-down policies policies-down keycloak compare status charts agent-ui test validate vllm-production vllm-production-down vllm-validate
 
 help: ## show targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-10s %s\n",$$1,$$2}'
@@ -58,6 +58,22 @@ policies-down: ## remove the gateway feature policies and Keycloak
 
 keycloak: ## install only the shared Keycloak realm in all three clusters
 	bash scripts/install-keycloak.sh
+
+vllm-production: ## deploy pinned vLLM services (set VLLM_CONTEXT to a GPU cluster)
+	@test -n "$(VLLM_CONTEXT)" || { echo 'set VLLM_CONTEXT to a kubectl context' >&2; exit 2; }
+	bash scripts/deploy-vllm-production.sh "$(VLLM_CONTEXT)"
+
+vllm-production-down: ## remove production vLLM services from VLLM_CONTEXT
+	@test -n "$(VLLM_CONTEXT)" || { echo 'set VLLM_CONTEXT to a kubectl context' >&2; exit 2; }
+	bash scripts/deploy-vllm-production.sh "$(VLLM_CONTEXT)" --delete
+
+vllm-validate: ## validate production vLLM APIs (set VLLM_BASE_URL)
+	@test -n "$(VLLM_BASE_URL)" || { echo 'set VLLM_BASE_URL to the Gateway URL' >&2; exit 2; }
+	python3 scripts/validate-vllm-contract.py --base-url "$(VLLM_BASE_URL)" \
+		--routing-header x-model-service --chat-model qwen3-8b \
+		--embedding-model qwen3-embedding-8b \
+		--rerank-model bge-reranker-v2-m3 \
+		--transcription-model whisper-large-v3-turbo
 
 compare: ## compare all gateways through the single KServe path
 	bash compare/run-comparison.sh

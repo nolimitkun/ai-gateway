@@ -4,10 +4,10 @@ kind: Kustomization
 # has no accelerators, so `make pools` applies kserve/pools without this
 # overlay and every pool lands on CPU.
 #
-# This overlay only adds placement and device requests. A real deployment also
-# replaces the mock container with a task-appropriate runtime — vLLM for the
-# chat pools, an embedding or ASR server for the others — and enables storage
-# initialization so the model is pulled instead of mounted from a ConfigMap.
+# This overlay intentionally remains a placement test for the mock. Use
+# kserve/production for pinned vLLM images, real model URIs, storage
+# initialization, production probes, and one independently scalable service
+# per model/task.
 resources:
   - ../../pools
 patches:

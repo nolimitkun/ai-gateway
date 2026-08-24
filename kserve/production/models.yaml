@@ -1,0 +1,105 @@
+# A vLLM process loads one model/task. Keep model aliases synchronized with the
+# request bodies used by scripts/validate-vllm-contract.py.
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: vllm-chat
+  namespace: ai-demo
+spec:
+  baseRefs: [{name: vllm-production}]
+  model:
+    uri: hf://Qwen/Qwen3-8B
+    name: qwen3-8b
+  storageInitializer: {enabled: true}
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        args: [--served-model-name, qwen3-8b, --port, "8000", --max-model-len, "32768", --gpu-memory-utilization, "0.90"]
+        resources:
+          requests: {cpu: "4", memory: 24Gi, nvidia.com/gpu: "1"}
+          limits: {cpu: "8", memory: 48Gi, nvidia.com/gpu: "1"}
+    nodeSelector: {nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3}
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  router:
+    gateway: {refs: [{name: ai-gateway, namespace: ai-demo}]}
+    route: {http: {refs: [{name: vllm-chat}]}}
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: vllm-embedding
+  namespace: ai-demo
+spec:
+  baseRefs: [{name: vllm-production}]
+  model:
+    uri: hf://Qwen/Qwen3-Embedding-8B
+    name: qwen3-embedding-8b
+  storageInitializer: {enabled: true}
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        args: [--served-model-name, qwen3-embedding-8b, --port, "8000", --runner, pooling, --gpu-memory-utilization, "0.90"]
+        resources:
+          requests: {cpu: "4", memory: 24Gi, nvidia.com/gpu: "1"}
+          limits: {cpu: "8", memory: 48Gi, nvidia.com/gpu: "1"}
+    nodeSelector: {nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3}
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  router:
+    gateway: {refs: [{name: ai-gateway, namespace: ai-demo}]}
+    route: {http: {refs: [{name: vllm-embedding}]}}
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: vllm-rerank
+  namespace: ai-demo
+spec:
+  baseRefs: [{name: vllm-production}]
+  model:
+    uri: hf://BAAI/bge-reranker-v2-m3
+    name: bge-reranker-v2-m3
+  storageInitializer: {enabled: true}
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        args: [--served-model-name, bge-reranker-v2-m3, --port, "8000", --runner, pooling, --gpu-memory-utilization, "0.90"]
+        resources:
+          requests: {cpu: "2", memory: 12Gi, nvidia.com/gpu: "1"}
+          limits: {cpu: "4", memory: 24Gi, nvidia.com/gpu: "1"}
+    nodeSelector: {nvidia.com/gpu.product: NVIDIA-L40S}
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  router:
+    gateway: {refs: [{name: ai-gateway, namespace: ai-demo}]}
+    route: {http: {refs: [{name: vllm-rerank}]}}
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: vllm-transcription
+  namespace: ai-demo
+spec:
+  baseRefs: [{name: vllm-production}]
+  model:
+    uri: hf://openai/whisper-large-v3-turbo
+    name: whisper-large-v3-turbo
+  storageInitializer: {enabled: true}
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        args: [--served-model-name, whisper-large-v3-turbo, --port, "8000", --gpu-memory-utilization, "0.90"]
+        resources:
+          requests: {cpu: "2", memory: 12Gi, nvidia.com/gpu: "1"}
+          limits: {cpu: "4", memory: 24Gi, nvidia.com/gpu: "1"}
+    nodeSelector: {nvidia.com/gpu.product: NVIDIA-L40S}
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  router:
+    gateway: {refs: [{name: ai-gateway, namespace: ai-demo}]}
+    route: {http: {refs: [{name: vllm-transcription}]}}

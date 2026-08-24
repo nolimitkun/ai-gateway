@@ -570,6 +570,8 @@ class Handler(BaseHTTPRequestHandler):
             "/v1/chat/completions": self.handle_chat,
             "/v1/embeddings": self.handle_embeddings,
             "/v1/rerank": self.handle_rerank,
+            "/v2/rerank": self.handle_rerank,
+            "/rerank": self.handle_rerank,
             "/v1/audio/transcriptions": self.handle_transcription,
         }
         handler = handlers.get(path)
@@ -639,23 +641,29 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "id": "chatcmpl-kserve",
                     "object": "chat.completion.chunk",
+                    "created": CREATED,
                     "model": model,
                     "choices": [
                         {
                             "index": 0,
-                            "delta": {"content": text},
+                            "delta": {"role": "assistant", "content": text},
                             "finish_reason": finish_reason,
                         }
                     ],
-                },
-                {
-                    "id": "chatcmpl-kserve",
-                    "object": "chat.completion.chunk",
-                    "model": model,
-                    "choices": [],
-                    "usage": usage,
-                },
+                }
             ]
+            stream_options = request.get("stream_options")
+            if isinstance(stream_options, dict) and stream_options.get("include_usage"):
+                chunks.append(
+                    {
+                        "id": "chatcmpl-kserve",
+                        "object": "chat.completion.chunk",
+                        "created": CREATED,
+                        "model": model,
+                        "choices": [],
+                        "usage": usage,
+                    }
+                )
             for chunk in chunks:
                 self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
                 self.wfile.flush()
@@ -668,6 +676,7 @@ class Handler(BaseHTTPRequestHandler):
             {
                 "id": "chatcmpl-kserve",
                 "object": "chat.completion",
+                "created": CREATED,
                 "model": model,
                 "choices": [
                     {
@@ -791,7 +800,12 @@ class Handler(BaseHTTPRequestHandler):
                 "id": "rerank-kserve",
                 "model": entry["id"],
                 "results": ranked,
-                "usage": {"search_units": 1},
+                "usage": {
+                    "prompt_tokens": token_count(query)
+                    + sum(token_count(document) for document in documents),
+                    "total_tokens": token_count(query)
+                    + sum(token_count(document) for document in documents),
+                },
                 "mock_pod": UPSTREAM,
                 "mock_accelerator": ACCELERATOR or "all",
                 "model_accelerator": entry["accelerator"],
