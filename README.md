@@ -20,7 +20,9 @@ Shared components are pinned once per cluster: KServe 0.20.0 and Keycloak
 
 This is the canonical gateway comparison. Other tables in this README describe
 models, APIs, accelerator pools, or deployment platforms—not differences
-between the three gateways.
+between the three gateways. It inventories the pinned APIs; it does not imply
+that every row is exercised by the default KServe fixture. The evidence table
+below separates live behavior from schema-only and path-limited capabilities.
 
 | Comparison | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
@@ -60,35 +62,47 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-25 10:23 (30 requests) | 2026-08-25 10:09 (30 requests) | 2026-08-25 10:13 (30 requests) |
+| Last isolated comparison (UTC) | 2026-08-25 13:11 (50 requests) | 2026-08-25 13:18 (50 requests) | 2026-08-25 13:05 (50 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
+| Route rules | chat Exact + /v1 prefix | chat Exact + /v1 prefix | chat Exact + /v1 prefix |
+| Endpoint-picker transport | TLS policy ready | Plaintext in local fixture | Plaintext in local fixture |
 | Workload replicas | 2/2 | 2/2 | 2/2 |
 | KServe-owned Deployments, Services, and Pool | 5 | 5 | 5 |
-| Latest routing sample | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods |
+| Latest routing sample | 50/50 HTTP 200, 2 pods | 50/50 HTTP 200, 2 pods | 50/50 HTTP 200, 2 pods |
 | Streaming usage chunk | Yes | Yes | Yes |
+| Streaming `[DONE]` termination | Yes | Yes | Yes |
 | Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
 | Tiered chat models | big/medium/small | big/medium/small | big/medium/small |
 | Embeddings API | Yes | Yes | Yes |
 | RAG embedding models | Yes | Yes | Yes |
+| Embedding dimension validation | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected |
 | Reranking API | Yes | Yes | Yes |
 | Speech-to-text API | Yes | Yes | Yes |
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
-| Local chat p50 | 38 ms | 42 ms | 55 ms |
+| Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
+| Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
+| Local chat p50 | 40 ms | 41 ms | 54 ms |
 | Policy objects reporting ready | 3/3 | 3/3 | 5/5 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
+| Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
 | Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
 | Decision headers returned to the client | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk |
-| Auto-routed chat p50 | 70 ms | 35 ms | 26 ms |
+| Auto-routed chat p50 | 41 ms | 40 ms | 30 ms |
+| Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
+| Authentication across models/chat/embed/rerank/STT | 5/5 denied / 5/5 allowed | 5/5 denied / 5/5 allowed | 5/5 denied / 5/5 allowed |
+| Verified identity headers at model pod | x-auth-plan=gold, x-auth-user=alice | x-auth-plan=gold, x-user-id=alice | Not configured |
 | Authorization: guest / non-admin B300 / admin B300 | 403 / 403 / 200 | 403 / 403 / 200 | 403 / 403 / 200 |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
+| Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
 | Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
 | Token limit (100 tokens per minute) | 429 on request 3 of 6 | 429 on request 3 of 6 | Not available on KServe InferencePool |
 | CORS preflight answered | No (HTTP 405) | Yes (HTTP 200) | Yes (HTTP 200) |
+| Unapproved CORS origin | No allow-origin (HTTP 405) | No allow-origin (HTTP 200) | No allow-origin (HTTP 200) |
 
 <!-- comparison-results:end -->
 
@@ -108,6 +122,57 @@ Three operational differences explain most of the matrix:
 - Kuadrant and Envoy enforce token budgets on the generic KServe path.
   agentgateway token units require its AI-backend tokenization metadata, which
   a Gateway API `InferencePool` does not publish.
+
+### Feature evidence and untested surface
+
+Evidence labels are deliberately strict:
+
+- **Live**: exercised through the public gateway and the KServe
+  `LLMInferenceService` path in the isolated run above.
+- **Schema**: accepted by the pinned vendored CRD/schema, but no live fixture is
+  installed for it.
+- **Path-limited**: the gateway supports it, but it requires a different
+  backend or protocol and cannot be honestly tested through the repository's
+  single generic KServe `InferencePool` path.
+- **Not provided**: the compared pinned API/profile does not supply it.
+
+| Capability | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway | Evidence boundary |
+|---|---|---|---|---|
+| KServe route, EPP, two model pods | Live | Live | Live | Programmed/Accepted conditions, ownership, and 50/50 successful routing sample |
+| Models, chat/SSE, embeddings, rerank, STT | Live | Live | Live | Valid and invalid contracts, `[DONE]`, dimensions, and unsupported diarization |
+| JWT and authorization | Live | Live | Live | Anonymous, forged, guest, member, and admin requests; all five APIs require a valid token |
+| Identity export to the model | Live | Live | Not configured | Allowlisted non-secret evidence headers are echoed by the mock runtime |
+| Request limits and quota threshold | Live, shared bucket | Live, per-user bucket | Live, shared local bucket | Limit threshold and Alice/Bob isolation are tested; full expiry windows are not waited out |
+| Token budget on KServe path | Live | Live | Path-limited | agentgateway token units need an AI backend/tokenizer, not a generic `InferencePool` |
+| CORS allow and reject | Not provided | Live | Live | Approved and unapproved origins are both probed |
+| Chat-only external processing | Live, raw `EnvoyFilter` | Live | Live | Selection, response headers, non-chat bypass, fail-open, and restoration are tested |
+| Endpoint-picker transport | Live TLS | Live plaintext fixture | Live plaintext fixture | Kuadrant additionally asserts `BackendTLSPolicy` readiness |
+| API-key authentication | Schema | Schema | Schema | Requires separate secrets and an authentication-composition test matrix |
+| Browser OIDC | Schema | Schema | Path-limited to MCP OAuth | Requires redirects, callback URLs, browser state, and a separate listener/client fixture |
+| Client mTLS | Schema | Schema | Schema | Requires an HTTPS listener plus client and trust-chain certificates |
+| External authorization service | Schema | Schema | Schema | Requires a mock HTTP/gRPC/OPA/SpiceDB authorization service |
+| LLM request shaping | Not provided | Path-limited to AI route/backend | Path-limited to AI backend | Generic KServe traffic intentionally remains provider-neutral |
+| Prompt guardrails | Not provided | Not provided | Path-limited to AI backend | Needs agentgateway AI-backend prompt processing |
+| Provider credentials | Not provided | Path-limited | Path-limited | Only meaningful for external provider backends, not the in-cluster KServe pool |
+| MCP routing and OAuth | Not provided | Path-limited | Path-limited | Requires `MCPRoute`/MCP backends and a separate protocol test path |
+| Telemetry export | Schema | Schema | Schema | No collector is installed and no metric/span/log delivery assertion is made |
+
+The pinned vendored CRDs are the authority for **Schema** rows. Upstream
+references are useful navigation but may describe a newer release:
+[Envoy AI Gateway API](https://aigateway.envoyproxy.io/docs/api/),
+[Envoy Gateway SecurityPolicy](https://gateway.envoyproxy.io/docs/concepts/gateway_api_extensions/security-policy/),
+[agentgateway policy execution order](https://agentgateway.dev/docs/kubernetes/main/about/policies/filter-order/), and
+[agentgateway API reference](https://agentgateway.dev/docs/kubernetes/latest/reference/api/).
+
+Per gateway, the remaining live gaps are therefore explicit. Kuadrant does not
+live-test `OIDCPolicy`, API keys, x509, HTTP/OPA/SpiceDB authorization, or
+telemetry. Envoy does not live-test API keys, OIDC, mTLS, `extAuth`, provider
+credentials, MCP, or AI-provider request mutation. agentgateway does not
+live-test API keys, mTLS, `extAuth`, global keyed rate limiting, AI-backend
+prompt guards/provider credentials, MCP OAuth, or telemetry. Those fixtures
+would either replace a currently isolated authentication mechanism or add a
+second non-KServe backend/protocol, so they are reported rather than silently
+credited as tested.
 
 ## Quick start
 
@@ -180,6 +245,12 @@ On a retained Kuadrant cluster, `make start-cluster` also waits for the
 operator's in-cluster Wasm server and then rolls the Istio gateway proxy once.
 This prevents Envoy from caching a fail-closed Wasm download attempted before
 the operator recovered. The other stacks need no equivalent proxy restart.
+Because every Kind cluster has exactly one control-plane node, recovery also
+disables scheduler and controller-manager leader election: there is no failover
+candidate, and surrendering a lease during a transient Docker-resume API stall
+otherwise leaves Deployments and ReplicaSets unreconciled. Polling reads have
+bounded client timeouts and always reevaluate current pods rather than watching
+stale ReplicaSet members.
 
 ## Deployment dependencies and versions
 
@@ -265,6 +336,7 @@ flowchart TB
 | Limits | Limitador-backed request, quota, and response `usage.total_tokens` accounting; fixture probe buckets are shared |
 | Semantic routing | Raw Istio `EnvoyFilter`; disabled by default and enabled only on the named `chat` route rule |
 | KServe connection | `HTTPRoute` → `InferencePool` → TLS-protected EPP → two model pods |
+| Deep live evidence | 50-request routing sample; five APIs; JWT/authz/identity; shared rate/quota; token budget; ext_proc scope/fail-open; EPP TLS |
 | Not provided in this profile | Native Kuadrant CORS or ext_proc policy; CORS probe returns HTTP 405 |
 
 This profile's Kustomize overlays change the route parent to
@@ -324,6 +396,7 @@ flowchart TB
 | Token path | `Host: ai.local` uses `AIGatewayRoute`; AI ext_proc publishes `llm_total_token` consumed as response cost |
 | Semantic routing | `EnvoyExtensionPolicy` targets only `HTTPRoute` rule `chat`; non-chat `/v1` APIs bypass it |
 | KServe connection | Both ordinary and AI-generated HTTP routes end at the same KServe `InferencePool` and EPP |
+| Deep live evidence | 50-request routing sample; five APIs; JWT/authz/identity; per-user rate/quota; token budget; CORS allow/reject; ext_proc scope/fail-open |
 | Installer compatibility fix | Clamps the invalid uint32 maximum in the 1.8.1 int32 `BackendTrafficPolicy` CRD |
 
 ### agentgateway
@@ -373,6 +446,7 @@ flowchart TB
 | Token boundary | Generic KServe `InferencePool` does not publish agentgateway AI-backend tokenization metadata, so token units are reported unavailable |
 | Semantic routing | Conditional `traffic.extProc` runs only when `request.path == "/v1/chat/completions"` |
 | KServe connection | `HTTPRoute` → KServe `InferencePool` → EPP → two model pods |
+| Deep live evidence | 50-request routing sample; five APIs; JWT/authz; shared local rate/quota; CORS allow/reject; ext_proc scope/fail-open |
 | Additional native surface | AI backends, prompt guards, model aliases/caching, MCP routing/OAuth, tracing, metrics, and access logs |
 
 ## Runtime profiles
@@ -381,7 +455,10 @@ flowchart TB
 
 The default `LLMInferenceService` has two Python replicas. Storage
 initialization is disabled and `mock-llm/server.py` is mounted from a ConfigMap.
-The runtime loads no weights and contacts no model provider.
+The runtime loads no weights and contacts no model provider. It also exposes a
+small Prometheus `/metrics` surface with vLLM-compatible running, waiting, and
+cache gauges so the llm-d scheduler can scrape it without filling logs with
+404s during retained-cluster recovery.
 
 It exposes the API subset used by the production vLLM validator:
 
@@ -721,18 +798,21 @@ check rather than quietly reporting the default as a routing decision.
 `make compare CLUSTER=<name>` adds live-cluster assertions to that gateway's
 saved result:
 
-- Gateway Programmed and route Accepted/ResolvedRefs conditions;
-- KServe readiness and ownership of workload, Services, scheduler, and pool;
-- distribution across both model pods;
-- model catalog and tier-correct routing;
-- streaming chat usage, embeddings, reranking, transcription, and diarization;
+- Gateway Programmed, both named route rules, Accepted/ResolvedRefs conditions,
+  KServe readiness/ownership, endpoint-picker transport, and both model pods;
+- model catalog, tier-correct routing, streaming usage and `[DONE]`, embeddings
+  including reduced/fixed dimensions, reranking, transcription, and
+  diarization capability rejection;
+- negative API contracts for unknown model, wrong task, excessive output,
+  fixed embedding dimensions, and unsupported diarization;
 - p50 local request latency;
-- policy readiness, authentication, authorization, rate limit, quota, token
-  budget, and CORS when the optional policy layer is installed;
+- policy readiness, authentication across models/chat/embed/rerank/STT,
+  identity-header propagation, authorization, rate and cross-user bucket
+  isolation, quota, token budget, and approved/unapproved CORS origins;
 - ext_proc attachment, the model chosen for each of three prompts, the model and
   system prompt the runtime received, the decision headers returned to the
-  client, and auto-routed p50 latency when the optional semantic routing layer
-  is installed.
+  client, non-chat bypass, controlled router failure/restoration, and
+  auto-routed p50 latency when the optional semantic routing layer is installed.
 
 Each run creates a separate ignored JSON result. `make comparison-summary`
 merges all three into the marked README table. Offline schema validation cannot

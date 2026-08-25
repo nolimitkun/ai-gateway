@@ -160,6 +160,58 @@ def probe_limit(cfg: dict, access_token: str, header: tuple[str, str], count: in
     return f"no 429 in {count}"
 
 
+def task_codes(cfg: dict, access_token: str) -> list[int]:
+    codes = [json_call(cfg, "/v1/models", access_token)[0]]
+    codes.append(json_call(cfg, "/v1/chat/completions", access_token, CHAT)[0])
+    codes.append(json_call(
+        cfg, "/v1/embeddings", access_token,
+        {"model": "mock-embedding", "input": "policy coverage"},
+    )[0])
+    codes.append(json_call(
+        cfg, "/v1/rerank", access_token,
+        {"model": "mock-reranker", "query": "gateway", "documents": ["gateway"]},
+    )[0])
+    code, _, _ = request(
+        cfg["base"] + "/v1/audio/transcriptions", method="POST",
+        headers=auth_headers(access_token),
+        multipart={"file": ("policy.wav", b"", "audio/wav"), "model": "mock-whisper"},
+    )
+    codes.append(code)
+    return codes
+
+
+def probe_router_fail_open(cfg: dict, access_token: str) -> str:
+    deployment = kube_json(cfg, "ai-demo", "deployment/semantic-router")
+    replicas = deployment.get("spec", {}).get("replicas", 1)
+    kubectl(cfg, "-n", "ai-demo", "scale", "deployment/semantic-router", "--replicas=0")
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        pods = json.loads(kubectl(
+            cfg, "-n", "ai-demo", "get", "pod", "-l", "app=semantic-router", "-o", "json",
+        ))
+        if not pods.get("items"):
+            break
+        time.sleep(2)
+    else:
+        raise RuntimeError("semantic-router pod did not terminate for the fail-open probe")
+
+    explicit = auto = 0
+    try:
+        explicit, _, _ = json_call(cfg, "/v1/chat/completions", access_token, CHAT)
+        auto, _, _ = json_call(
+            cfg, "/v1/chat/completions", access_token,
+            {"model": "auto", "messages": CHAT["messages"]},
+        )
+    finally:
+        kubectl(cfg, "-n", "ai-demo", "scale", "deployment/semantic-router", f"--replicas={replicas}")
+        kubectl(
+            cfg, "-n", "ai-demo", "rollout", "status", "deployment/semantic-router",
+            "--timeout=420s",
+        )
+        wait_for_router(cfg, access_token)
+    return f"explicit {explicit} / auto {auto} / restored"
+
+
 def policy_summary(cfg: dict) -> tuple[bool, str]:
     ready = 0
     present = False
@@ -242,6 +294,8 @@ def run(cluster: str, sample_count: int) -> dict:
     result["gateway_programmed"] = "Yes" if has_condition(gateway, "Programmed") else "No"
     result["llmisvc_ready"] = "Yes" if has_condition(llmisvc, "Ready") else "No"
     result["route_ready"] = f"{'Yes' if has_condition(route, 'Accepted') else 'No'} / {'Yes' if has_condition(route, 'ResolvedRefs') else 'No'}"
+    route_names = [rule.get("name") for rule in route.get("spec", {}).get("rules", [])]
+    result["route_rules"] = "chat Exact + /v1 prefix" if route_names == ["chat", "inference"] else "Unexpected"
 
     deployment = kube_json(cfg, "ai-demo", "deployment/kserve-mock-kserve")
     result["workload_replicas"] = f"{deployment.get('status', {}).get('readyReplicas', 0)}/{deployment.get('spec', {}).get('replicas', 0)}"
@@ -271,6 +325,7 @@ def run(cluster: str, sample_count: int) -> dict:
     stream_payload = dict(CHAT, stream=True, stream_options={"include_usage": True})
     code, raw, _ = request(cfg["base"] + "/v1/chat/completions", method="POST", headers=auth_headers(access_token), json_body=stream_payload)
     result["streaming_usage"] = "Yes" if code == 200 and b'"usage"' in raw else "No"
+    result["stream_termination"] = "Yes" if code == 200 and raw.rstrip().endswith(b"data: [DONE]") else "No"
 
     code, models, _ = json_call(cfg, "/v1/models", access_token)
     result["model_catalog"] = f"{len(models.get('data', []))} models" if code == 200 else "No"
@@ -288,6 +343,9 @@ def run(cluster: str, sample_count: int) -> dict:
         data = body.get("data", [])
         rag_ok &= code == 200 and bool(data) and len(data[0].get("embedding", [])) == dimensions
     result["rag_embeddings"] = "Yes" if rag_ok else "No"
+    accepted, reduced, _ = json_call(cfg, "/v1/embeddings", access_token, {"model": "qwen3-embedding-8b", "input": "chunk", "dimensions": 512})
+    rejected, _, _ = json_call(cfg, "/v1/embeddings", access_token, {"model": "bge-m3", "input": "chunk", "dimensions": 512})
+    result["embedding_dimensions"] = "512 accepted / fixed-size rejected" if accepted == 200 and len(reduced.get("data", [{}])[0].get("embedding", [])) == 512 and rejected == 400 else "No"
     code, rerank, _ = json_call(cfg, "/v1/rerank", access_token, {"model": "mock-reranker", "query": "gateway inference", "documents": ["other", "gateway inference"], "top_n": 1})
     rerank_results = rerank.get("results", [])
     result["reranking"] = "Yes" if code == 200 and rerank_results and rerank_results[0].get("index") == 1 else "No"
@@ -300,6 +358,24 @@ def run(cluster: str, sample_count: int) -> dict:
     diarization = body_json(raw)
     speakers = {segment.get("speaker") for segment in diarization.get("segments", [])}
     result["diarization"] = f"{len(speakers)} speakers" if code == 200 and diarization.get("diarization") and speakers else "No"
+    code, raw, _ = request(cfg["base"] + "/v1/audio/transcriptions", method="POST", headers=headers, multipart={"file": ("asr.wav", b"", "audio/wav"), "model": "voxtral-mini-3b", "diarization": "true"})
+    result["stt_validation"] = "ASR-only diarization rejected" if code == 400 and body_json(raw).get("error") else "No"
+
+    negative_codes = [
+        json_call(cfg, "/v1/chat/completions", access_token, {"model": "missing-model", "messages": CHAT["messages"]})[0],
+        json_call(cfg, "/v1/chat/completions", access_token, {"model": "mock-embedding", "messages": CHAT["messages"]})[0],
+        json_call(cfg, "/v1/chat/completions", access_token, {"model": "mock-kserve", "messages": CHAT["messages"], "max_tokens": 1025})[0],
+        rejected,
+        code,
+    ]
+    result["negative_contracts"] = "404 / 400 / 400 / 400 / 400" if negative_codes == [404, 400, 400, 400, 400] else " / ".join(map(str, negative_codes))
+
+    task_routing = [
+        embeddings.get("mock_routing_headers", {}),
+        rerank.get("mock_routing_headers", {}),
+        stt.get("mock_routing_headers", {}),
+    ]
+    result["router_scope"] = "3/3 non-chat tasks bypassed" if router_present and all(not item for item in task_routing) else ("No router" if not router_present else "Failed")
 
     result["policy_ready"] = policy_ready
     result["router_attachment"] = router_ready
@@ -326,8 +402,9 @@ def run(cluster: str, sample_count: int) -> dict:
         result["auto_upstream"] = f"{' / '.join(upstream)}; system prompt {system_prompts}/{len(AUTO_PROMPTS)}"
         result["auto_decision"] = " / ".join(decisions)
         result["auto_p50"] = f"{round(statistics.median(auto_latencies))} ms"
+        result["router_fail_open"] = probe_router_fail_open(cfg, access_token)
     else:
-        for key in ("auto_models", "auto_upstream", "auto_decision", "auto_p50"):
+        for key in ("auto_models", "auto_upstream", "auto_decision", "auto_p50", "router_fail_open"):
             result[key] = "No router"
 
     result["token_issuance"] = "Yes" if access_token else "No"
@@ -336,12 +413,36 @@ def run(cluster: str, sample_count: int) -> dict:
         forged, _, _ = json_call(cfg, "/v1/chat/completions", "not.a.real.token", CHAT)
         valid, _, _ = json_call(cfg, "/v1/chat/completions", access_token, CHAT)
         result["authentication"] = f"{anonymous} / {forged} / {valid}"
+        anonymous_tasks = task_codes(cfg, "")
+        valid_tasks = task_codes(cfg, access_token)
+        result["task_authentication"] = (
+            "5/5 denied / 5/5 allowed"
+            if anonymous_tasks == [401] * 5 and valid_tasks == [200] * 5
+            else f"anonymous {anonymous_tasks} / valid {valid_tasks}"
+        )
+        _, identity_body, _ = json_call(cfg, "/v1/chat/completions", access_token, CHAT)
+        identity_headers = identity_body.get("mock_gateway_headers", {})
+        expected_identity = {
+            "ai-gw-kuadrant": {"x-auth-user": "alice", "x-auth-plan": "gold"},
+            "ai-gw-envoy": {"x-user-id": "alice", "x-auth-plan": "gold"},
+            "ai-gw-agent": {},
+        }[cluster]
+        if identity_headers == expected_identity:
+            result["identity_headers"] = "Not configured" if not expected_identity else ", ".join(f"{key}={value}" for key, value in sorted(identity_headers.items()))
+        else:
+            result["identity_headers"] = f"Unexpected: {identity_headers}"
         mallory, bob = token(cfg, "mallory"), token(cfg, "bob")
         guest, _, _ = json_call(cfg, "/v1/chat/completions", mallory, CHAT)
         restricted, _, _ = json_call(cfg, "/v1/chat/completions", bob, BIG_CHAT, {"x-model-class": "b300"})
         allowed, _, _ = json_call(cfg, "/v1/chat/completions", access_token, BIG_CHAT, {"x-model-class": "b300"})
         result["authorization"] = f"{guest} / {restricted} / {allowed}"
         result["request_limit"] = probe_limit(cfg, access_token, ("x-rate-limit-probe", "true"), 8)
+        bob_rate, _, _ = json_call(cfg, "/v1/chat/completions", bob, CHAT, {"x-rate-limit-probe": "true"})
+        expected_bob = 200 if cluster == "ai-gw-envoy" else 429
+        result["rate_scope"] = (
+            ("per-user; Bob HTTP 200" if expected_bob == 200 else "shared; Bob HTTP 429")
+            if bob_rate == expected_bob else f"Unexpected Bob HTTP {bob_rate}"
+        )
         result["quota_limit"] = probe_limit(cfg, access_token, ("x-quota-probe", f"probe-{int(time.time())}"), 6)
         if cluster in ("ai-gw-kuadrant", "ai-gw-agent") and str(result["quota_limit"]).startswith("429"):
             result["quota_limit"] += "; shared bucket"
@@ -352,7 +453,7 @@ def run(cluster: str, sample_count: int) -> dict:
         else:
             result["token_limit"] = probe_limit(cfg, access_token, ("x-token-limit-probe", "true"), 6, BIG_CHAT)
     else:
-        for key in ("authentication", "authorization", "request_limit", "quota_limit", "token_limit"):
+        for key in ("authentication", "task_authentication", "identity_headers", "authorization", "request_limit", "rate_scope", "quota_limit", "token_limit"):
             result[key] = "No policy" if not policies_present else "Token error"
 
     code, _, cors_headers = request(
@@ -360,6 +461,21 @@ def run(cluster: str, sample_count: int) -> dict:
         headers={"origin": "https://console.example.com", "access-control-request-method": "POST", "access-control-request-headers": "authorization"},
     )
     result["cors"] = f"Yes (HTTP {code})" if any(k.lower() == "access-control-allow-origin" for k in cors_headers) else f"No (HTTP {code})"
+    denied_code, _, denied_headers = request(
+        cfg["base"] + "/v1/chat/completions", method="OPTIONS",
+        headers={"origin": "https://evil.example.com", "access-control-request-method": "POST"},
+    )
+    result["cors_rejection"] = (
+        f"No allow-origin (HTTP {denied_code})"
+        if not any(k.lower() == "access-control-allow-origin" for k in denied_headers)
+        else "Failed"
+    )
+
+    if cluster == "ai-gw-kuadrant":
+        tls_policy = kube_json(cfg, "ai-demo", "backendtlspolicy/kserve-mock-epp")
+        result["epp_transport"] = "TLS policy ready" if any(c.get("status") == "True" for c in conditions(tls_policy)) else "TLS policy not ready"
+    else:
+        result["epp_transport"] = "Plaintext in local fixture"
     return result
 
 
