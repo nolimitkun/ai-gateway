@@ -2,7 +2,9 @@
 # Install Envoy AI Gateway for the KServe-only comparison.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CTX="kind-ai-gw-envoy"
+[[ $# -eq 1 ]] || { echo "usage: $0 kind-ai-gw-envoy" >&2; exit 2; }
+CTX="$1"
+[[ "$CTX" == kind-ai-gw-envoy ]] || { echo "install-envoy-ai-gateway.sh only supports kind-ai-gw-envoy" >&2; exit 2; }
 EG_VERSION="${EG_VERSION:-v1.8.1}"
 AIEG_VERSION="${AIEG_VERSION:-v1.0.0}"
 GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
@@ -20,6 +22,7 @@ $H upgrade -i eg "$ROOT/envoy-ai-gateway/charts/gateway-helm-${EG_VERSION}.tgz" 
   -f "$ROOT/envoy-ai-gateway/values/envoy-gateway.values.yaml" --wait --timeout 5m
 kubectl --context "$CTX" wait --timeout=3m -n envoy-gateway-system \
   deployment/envoy-gateway --for=condition=Available
+bash "$ROOT/scripts/fix-envoy-gateway-crd.sh" "$CTX"
 
 echo "==> [3/5] AI Gateway CRDs $AIEG_VERSION"
 $H upgrade -i aieg-crd "$ROOT/envoy-ai-gateway/charts/ai-gateway-crds-helm-${AIEG_VERSION}.tgz" \

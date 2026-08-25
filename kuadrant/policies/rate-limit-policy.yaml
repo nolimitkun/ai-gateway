@@ -1,10 +1,12 @@
-# Request rate limiting and per-plan daily quota, replacing the deliberately
+# Request rate limiting and a daily quota probe, replacing the deliberately
 # neutral policy applied by `make up`.
 #
 # The `comparison` limit stays high so latency sampling is unaffected. The
 # probe limits are selected by an opt-in request header, which is what lets a
-# single comparison run measure enforcement without spending the quota that
-# ordinary traffic shares.
+# comparison run measure enforcement without spending ordinary traffic's
+# quota. These are intentionally shared counters: Kuadrant 1.5.2's Istio Wasm
+# integration does not expose Authorino's `auth.identity` metadata to the
+# rate-limit action in this local KServe topology.
 apiVersion: kuadrant.io/v1
 kind: RateLimitPolicy
 metadata:
@@ -24,35 +26,11 @@ spec:
       rates:
         - limit: 5
           window: 1m
-      counters:
-        - expression: auth.identity.sub
       when:
         - predicate: '"x-rate-limit-probe" in request.headers'
     daily-quota-probe:
       rates:
         - limit: 3
           window: 24h
-      counters:
-        - expression: auth.identity.sub
-        # A counter on the probe header gives every comparison run its own
-        # daily bucket, so a second run on the same day still measures
-        # enforcement instead of reporting an already-spent quota.
-        - expression: request.headers["x-quota-probe"]
       when:
         - predicate: '"x-quota-probe" in request.headers'
-    free-plan-quota:
-      rates:
-        - limit: 2000
-          window: 24h
-      counters:
-        - expression: auth.identity.sub
-      when:
-        - predicate: 'auth.identity.plan == "free"'
-    gold-plan-quota:
-      rates:
-        - limit: 20000
-          window: 24h
-      counters:
-        - expression: auth.identity.sub
-      when:
-        - predicate: 'auth.identity.plan == "gold"'

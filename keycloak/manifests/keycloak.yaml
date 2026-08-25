@@ -30,6 +30,11 @@ metadata:
     app: keycloak
 spec:
   replicas: 1
+  # Each local cluster is deliberately small. Realm refreshes may briefly
+  # interrupt token issuance, so replace the single memory-heavy pod instead
+  # of running two Keycloak instances during a rolling update.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: keycloak

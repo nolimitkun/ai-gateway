@@ -2,8 +2,9 @@
 #
 # Authorino verifies the Keycloak access token, then two authorization rules
 # run: every caller must belong to the `model-users` group, and only
-# `platform-admins` may reach the B300 pool. The identity attributes the
-# policy exports are what TokenRateLimitPolicy and RateLimitPolicy count on.
+# `platform-admins` may reach the B300 pool. The exported identity headers are
+# also useful to the upstream application and make the authenticated identity
+# visible in access logs.
 apiVersion: kuadrant.io/v1
 kind: AuthPolicy
 metadata:

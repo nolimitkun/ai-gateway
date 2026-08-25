@@ -33,7 +33,10 @@ spec:
         # by the policy layer -- the router only rewrites what it is given.
         operation: INSERT_FIRST
         value:
-          name: envoy.filters.http.ext_proc
+          # KServe's endpoint picker is itself an ext_proc filter and uses the
+          # canonical name. A distinct name prevents its per-route override
+          # from replacing this filter's semantic-router gRPC service.
+          name: ai.gateway.semantic_router
           typed_config:
             '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
             # A router that is down must not take the inference path with it:
@@ -54,6 +57,45 @@ spec:
               envoy_grpc:
                 cluster_name: outbound|50051||semantic-router.ai-demo.svc.cluster.local
               timeout: 10s
+    # Disable the listener-level filter by default. The chat route below is
+    # the only route that opts back in, so task APIs and Keycloak bypass the
+    # semantic router rather than receiving its chat-only 404 response.
+    - applyTo: VIRTUAL_HOST
+      match:
+        context: GATEWAY
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            ai.gateway.semantic_router:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: chat
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            ai.gateway.semantic_router:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              overrides:
+                processing_mode:
+                  request_header_mode: SEND
+                  response_header_mode: SEND
+                  request_body_mode: BUFFERED
+                  response_body_mode: NONE
+                  request_trailer_mode: SKIP
+                  response_trailer_mode: SKIP
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: outbound|50051||semantic-router.ai-demo.svc.cluster.local
+                  timeout: 10s
+                failure_mode_allow: true
 ---
 # Istio would otherwise offer mTLS to the router, which is not in the mesh and
 # terminates plaintext h2c. Without this the ext_proc calls fail the TLS

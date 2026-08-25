@@ -4,7 +4,9 @@
 # GatewayClass ("agentgateway"), so no additional Gateway provider is required.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CTX="kind-ai-gw-agent"
+[[ $# -eq 1 ]] || { echo "usage: $0 kind-ai-gw-agent" >&2; exit 2; }
+CTX="$1"
+[[ "$CTX" == kind-ai-gw-agent ]] || { echo "install-agentgateway.sh only supports kind-ai-gw-agent" >&2; exit 2; }
 GWAPI_VERSION="${GWAPI_VERSION:-1.6.0}"
 GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
 AGW_VERSION="${AGW_VERSION:-v1.4.1}"

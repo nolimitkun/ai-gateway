@@ -1,15 +1,11 @@
 name: gateway comparison
 
-# The full run: three kind clusters, KServe in each, the gateway policy layer,
-# and the comparison probes -- everything `make up && make policies &&
-# make compare` does on a laptop. The measured rows are committed directly to
-# README.md. It takes the better part of an hour, so it is manual and weekly
-# rather than per-push.
+# The full run builds and tests one retained kind cluster at a time. Per-stack
+# JSON fragments are merged into README.md only after all three passes finish.
 #
 # Standard runners are free for public repositories and give this job 4 CPUs,
-# 16 GB of RAM and a disk that needs clearing first. If a run ever exhausts
-# those, the next step is one cluster per matrix job, which needs the
-# comparison harness to emit per-stack fragments a final job merges.
+# 16 GB of RAM and a disk that needs clearing first. Only one cluster node runs
+# at a time, while stopped nodes retain their installed state.
 on:
   workflow_dispatch:
     inputs:
@@ -32,9 +28,8 @@ on:
 permissions:
   contents: write
 
-# One run at a time: three clusters and fixed host ports do not share a runner
-# with a second copy of themselves, and a cancelled half-built run tells us
-# nothing.
+# One run at a time: the fixed host ports do not share a runner with a second
+# copy, and a cancelled half-built run tells us nothing.
 concurrency:
   group: gateway-comparison
   cancel-in-progress: false
@@ -84,35 +79,35 @@ jobs:
           kubectl version --client
           helm version --short
 
-      - name: build the three gateway environments
-        run: make up
-        timeout-minutes: 75
+      - name: build the gateway environments sequentially
+        run: make up-all
+        timeout-minutes: 100
 
-      - name: runner headroom after the clusters are up
+      - name: runner headroom after installation
         if: always()
         run: |
           free -h
           df -h /
           docker ps --format 'table {{.Names}}\t{{.Status}}'
 
-      - name: deploy the gateway feature policies
+      - name: deploy gateway feature policies sequentially
         if: github.event_name == 'schedule' || inputs.features
-        run: make policies
-        timeout-minutes: 30
+        run: make policies-all
+        timeout-minutes: 45
 
-      - name: deploy the semantic router
+      - name: deploy semantic routers sequentially
         # Keyword decisions load no model weights, so this costs an image pull
         # and about 256 MiB per cluster rather than the several GiB the
         # classifier profile would need.
         if: github.event_name == 'schedule' || inputs.router
-        run: make semantic-router
-        timeout-minutes: 20
+        run: make semantic-router-all
+        timeout-minutes: 30
 
-      - name: run the comparison
+      - name: run and merge the sequential comparison
         env:
           N: ${{ inputs.requests || '30' }}
-        run: make compare | tee -a "$GITHUB_STEP_SUMMARY"
-        timeout-minutes: 20
+        run: make compare-all | tee -a "$GITHUB_STEP_SUMMARY"
+        timeout-minutes: 35
 
       - name: commit the updated README
         run: |
@@ -135,6 +130,9 @@ jobs:
           for cluster in ai-gw-kuadrant ai-gw-envoy ai-gw-agent; do
             ctx="kind-$cluster"
             kubectl config get-contexts "$ctx" >/dev/null 2>&1 || continue
+            docker start "$cluster-control-plane" >/dev/null 2>&1 || continue
+            kubectl --context "$ctx" wait --for=condition=Ready \
+              "node/$cluster-control-plane" --timeout=120s >/dev/null 2>&1 || true
             {
               dump kubectl --context "$ctx" get pods -A -o wide
               dump kubectl --context "$ctx" get pods -A \
@@ -150,6 +148,7 @@ jobs:
               dump kubectl --context "$ctx" logs -n ai-demo deployment/semantic-router --tail=200
               dump kubectl --context "$ctx" get events -A --sort-by=.lastTimestamp
             } > "diagnostics/$cluster.txt"
+            docker stop -t 5 "$cluster-control-plane" >/dev/null 2>&1 || true
           done
           { free -h; df -h /; } > diagnostics/runner.txt 2>&1
 

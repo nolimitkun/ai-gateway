@@ -9,11 +9,12 @@ time in a cluster, as an ordinary 404 from the runtime.
 This closes that gap offline. It checks that every model the router can choose
 is a chat model in the mock catalog, that every decision resolves to exactly
 one keyword rule, and -- the part that keeps the comparison honest -- that the
-three prompts `make compare` sends actually select the three different models
+three prompts `make compare CLUSTER=<name>` sends actually select the three different models
 the comparison reports.
 
 Usage: python3 scripts/validate-router-config.py
 """
+import ast
 import re
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ except ImportError:  # pragma: no cover - PyYAML ships with the tooling
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "semantic-router" / "config" / "router-config.yaml"
-COMPARISON = ROOT / "compare" / "run-comparison.sh"
+COMPARISON = ROOT / "compare" / "run-gateway.py"
 
 sys.path.insert(0, str(ROOT / "mock-llm"))
 from server import CATALOG  # noqa: E402
@@ -47,17 +48,19 @@ def matching_rules(prompt, rules):
 
 
 def comparison_prompts():
-    """The prompts `make compare` sends, read from the comparison itself.
+    """The prompts `make compare CLUSTER=<name>` sends, read from the comparison itself.
 
     Validating prompts that live only in this file would prove nothing about
     the ones actually sent, so they are extracted from the script.
     """
-    text = COMPARISON.read_text(encoding="utf-8")
-    prompts = re.findall(r"""auto_model "\$base" '([^']+)'""", text)
-    body = re.search(r"^AUTO_BODY='(.+)'$", text, re.MULTILINE)
-    if body:
-        prompts.append(yaml.safe_load(body.group(1))["messages"][0]["content"])
-    return prompts
+    tree = ast.parse(COMPARISON.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "AUTO_PROMPTS"
+            for target in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    return []
 
 
 def main():

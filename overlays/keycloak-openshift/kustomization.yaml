@@ -1,9 +1,9 @@
-# The OpenShift profile serves every route from the shared
-# Gateway/openshift-ai-inference in openshift-ingress.
+# Keep overlays outside the Keycloak base directory. Recent Kustomize releases
+# reject a child overlay that imports its own ancestor as a resource cycle.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - ../..
+  - ../../keycloak
 patches:
   - target:
       group: gateway.networking.k8s.io
