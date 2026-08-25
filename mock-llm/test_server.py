@@ -73,6 +73,17 @@ class RuntimeTest(unittest.TestCase):
         connection.close()
         return response.status, payload
 
+    def get_raw(self, path):
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_address[1], timeout=5
+        )
+        connection.request("GET", path)
+        response = connection.getresponse()
+        body = response.read().decode()
+        content_type = response.getheader("content-type")
+        connection.close()
+        return response.status, content_type, body
+
     def multipart(self, fields, filename="sample.wav"):
         boundary = "mock-boundary"
         body = b""
@@ -105,6 +116,13 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(payload["object"], "chat.completion")
         self.assertIsInstance(payload["created"], int)
         self.assertEqual(payload["choices"][0]["message"]["role"], "assistant")
+
+    def test_metrics_supports_kserve_scheduler_scraping(self):
+        status, content_type, body = self.get_raw("/metrics")
+        self.assertEqual(status, 200)
+        self.assertIn("text/plain", content_type)
+        self.assertIn("vllm:num_requests_running 0", body)
+        self.assertIn("vllm:num_requests_waiting 0", body)
 
     def test_embeddings_are_deterministic(self):
         status, payload = self.post_json(
@@ -296,6 +314,25 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(
             payload["mock_routing_headers"],
             {"x-selected-model": "kimi-k3", "x-vsr-skip-processing": "false"},
+        )
+        self.assertEqual(payload["mock_gateway_headers"], {"x-model-class": "b300"})
+
+    def test_only_allowlisted_gateway_evidence_headers_are_echoed(self):
+        status, payload = self.post_json_with_headers(
+            "/v1/chat/completions",
+            {"model": "mock-kserve", "messages": [{"role": "user", "content": "hi"}]},
+            {
+                "x-auth-user": "alice",
+                "x-auth-plan": "gold",
+                "x-user-id": "alice",
+                "authorization": "Bearer secret",
+                "x-api-key": "secret",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            payload["mock_gateway_headers"],
+            {"x-auth-user": "alice", "x-auth-plan": "gold", "x-user-id": "alice"},
         )
 
     def test_a_request_no_router_touched_reports_no_decision(self):

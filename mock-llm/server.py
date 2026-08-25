@@ -427,7 +427,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        self.write_body(body)
+
+    def send_text(self, status, body, content_type="text/plain; charset=utf-8"):
+        payload = body.encode()
+        self.send_response(status)
+        self.send_header("content-type", content_type)
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.write_body(payload)
+
+    def write_body(self, body):
+        # Health/metrics scrapers use short deadlines and can disconnect while
+        # a resource-constrained retained cluster is resuming. That is not a
+        # runtime error and must not emit a traceback for every abandoned read.
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def send_error_payload(self, status, message, error_type, code=None):
         error = {"message": message, "type": error_type}
@@ -507,6 +524,20 @@ class Handler(BaseHTTPRequestHandler):
             or name.lower().startswith("x-vsr-")
         }
 
+    def gateway_headers(self):
+        """Echo only non-secret headers that prove gateway policy behavior."""
+        allowed = {
+            "x-auth-user",
+            "x-auth-plan",
+            "x-user-id",
+            "x-model-class",
+        }
+        return {
+            name.lower(): value
+            for name, value in self.headers.items()
+            if name.lower() in allowed
+        }
+
     def read_json(self):
         try:
             payload = json.loads(self.read_body() or b"{}")
@@ -530,6 +561,20 @@ class Handler(BaseHTTPRequestHandler):
                     "accelerator": ACCELERATOR or "all",
                     "models": len(SERVED),
                 },
+            )
+        elif path == "/metrics":
+            self.send_text(
+                200,
+                "# HELP vllm:num_requests_running Number of running requests.\n"
+                "# TYPE vllm:num_requests_running gauge\n"
+                "vllm:num_requests_running 0\n"
+                "# HELP vllm:num_requests_waiting Number of waiting requests.\n"
+                "# TYPE vllm:num_requests_waiting gauge\n"
+                "vllm:num_requests_waiting 0\n"
+                "# HELP vllm:gpu_cache_usage_perc Mock KV cache usage.\n"
+                "# TYPE vllm:gpu_cache_usage_perc gauge\n"
+                "vllm:gpu_cache_usage_perc 0\n",
+                "text/plain; version=0.0.4; charset=utf-8",
             )
         elif path == "/v1/models":
             self.dispatch(lambda: self.handle_model_list(query))
@@ -713,6 +758,7 @@ class Handler(BaseHTTPRequestHandler):
                     for message in messages
                 ),
                 "mock_routing_headers": self.routing_headers(),
+                "mock_gateway_headers": self.gateway_headers(),
             },
         )
 
@@ -769,6 +815,8 @@ class Handler(BaseHTTPRequestHandler):
                 "mock_accelerator": ACCELERATOR or "all",
                 "model_accelerator": entry["accelerator"],
                 "mock_dimensions": dimensions,
+                "mock_routing_headers": self.routing_headers(),
+                "mock_gateway_headers": self.gateway_headers(),
             },
         )
 
@@ -832,6 +880,8 @@ class Handler(BaseHTTPRequestHandler):
                 "mock_pod": UPSTREAM,
                 "mock_accelerator": ACCELERATOR or "all",
                 "model_accelerator": entry["accelerator"],
+                "mock_routing_headers": self.routing_headers(),
+                "mock_gateway_headers": self.gateway_headers(),
             },
         )
 
@@ -913,6 +963,8 @@ class Handler(BaseHTTPRequestHandler):
             "mock_pod": UPSTREAM,
             "mock_accelerator": ACCELERATOR or "all",
             "model_accelerator": entry["accelerator"],
+            "mock_routing_headers": self.routing_headers(),
+            "mock_gateway_headers": self.gateway_headers(),
         }
         if response_format == "verbose_json" or diarize:
             if not diarize:
