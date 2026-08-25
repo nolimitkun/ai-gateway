@@ -335,8 +335,8 @@ def run(cluster: str, sample_count: int) -> dict:
         tier_ok.append(code == 200 and body.get("model") == model and body.get("mock_tier") == tier)
     result["tiered_chat"] = "big/medium/small" if all(tier_ok) else "No"
 
-    code, embeddings, _ = json_call(cfg, "/v1/embeddings", access_token, {"model": "mock-embedding", "input": ["one", "two"]})
-    result["embeddings"] = "Yes" if code == 200 and len(embeddings.get("data", [])) == 2 else "No"
+    embeddings_code, embeddings, _ = json_call(cfg, "/v1/embeddings", access_token, {"model": "mock-embedding", "input": ["one", "two"]})
+    result["embeddings"] = "Yes" if embeddings_code == 200 and len(embeddings.get("data", [])) == 2 else "No"
     rag_ok = True
     for model, dimensions in (("qwen3-embedding-8b", 4096), ("bge-m3", 1024)):
         code, body, _ = json_call(cfg, "/v1/embeddings", access_token, {"model": model, "input": ["RAG"]})
@@ -346,14 +346,14 @@ def run(cluster: str, sample_count: int) -> dict:
     accepted, reduced, _ = json_call(cfg, "/v1/embeddings", access_token, {"model": "qwen3-embedding-8b", "input": "chunk", "dimensions": 512})
     rejected, _, _ = json_call(cfg, "/v1/embeddings", access_token, {"model": "bge-m3", "input": "chunk", "dimensions": 512})
     result["embedding_dimensions"] = "512 accepted / fixed-size rejected" if accepted == 200 and len(reduced.get("data", [{}])[0].get("embedding", [])) == 512 and rejected == 400 else "No"
-    code, rerank, _ = json_call(cfg, "/v1/rerank", access_token, {"model": "mock-reranker", "query": "gateway inference", "documents": ["other", "gateway inference"], "top_n": 1})
+    rerank_code, rerank, _ = json_call(cfg, "/v1/rerank", access_token, {"model": "mock-reranker", "query": "gateway inference", "documents": ["other", "gateway inference"], "top_n": 1})
     rerank_results = rerank.get("results", [])
-    result["reranking"] = "Yes" if code == 200 and rerank_results and rerank_results[0].get("index") == 1 else "No"
+    result["reranking"] = "Yes" if rerank_code == 200 and rerank_results and rerank_results[0].get("index") == 1 else "No"
 
     headers = auth_headers(access_token)
-    code, raw, _ = request(cfg["base"] + "/v1/audio/transcriptions", method="POST", headers=headers, multipart={"file": ("sample.wav", b"", "audio/wav"), "model": "mock-whisper"})
+    stt_code, raw, _ = request(cfg["base"] + "/v1/audio/transcriptions", method="POST", headers=headers, multipart={"file": ("sample.wav", b"", "audio/wav"), "model": "mock-whisper"})
     stt = body_json(raw)
-    result["stt"] = "Yes" if code == 200 and stt.get("model") == "mock-whisper" else "No"
+    result["stt"] = "Yes" if stt_code == 200 and stt.get("model") == "mock-whisper" else "No"
     code, raw, _ = request(cfg["base"] + "/v1/audio/transcriptions", method="POST", headers=headers, multipart={"file": ("meeting.wav", b"", "audio/wav"), "model": "whisper-large-v3", "diarization": "true", "num_speakers": "3"})
     diarization = body_json(raw)
     speakers = {segment.get("speaker") for segment in diarization.get("segments", [])}
@@ -370,12 +370,15 @@ def run(cluster: str, sample_count: int) -> dict:
     ]
     result["negative_contracts"] = "404 / 400 / 400 / 400 / 400" if negative_codes == [404, 400, 400, 400, 400] else " / ".join(map(str, negative_codes))
 
-    task_routing = [
-        embeddings.get("mock_routing_headers", {}),
-        rerank.get("mock_routing_headers", {}),
-        stt.get("mock_routing_headers", {}),
+    task_outcomes = [
+        (embeddings_code, embeddings.get("mock_routing_headers", {})),
+        (rerank_code, rerank.get("mock_routing_headers", {})),
+        (stt_code, stt.get("mock_routing_headers", {})),
     ]
-    result["router_scope"] = "3/3 non-chat tasks bypassed" if router_present and all(not item for item in task_routing) else ("No router" if not router_present else "Failed")
+    result["router_scope"] = "3/3 non-chat tasks bypassed" if router_present and all(
+        status == 200 and not routing_headers
+        for status, routing_headers in task_outcomes
+    ) else ("No router" if not router_present else "Failed")
 
     result["policy_ready"] = policy_ready
     result["router_attachment"] = router_ready

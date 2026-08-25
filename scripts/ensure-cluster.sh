@@ -24,16 +24,20 @@ desired = obj.get("spec", {}).get("replicas", 1)
 status = obj.get("status", {})
 ok = (
     status.get("observedGeneration", 0) >= obj.get("metadata", {}).get("generation", 0)
-    and status.get("updatedReplicas", 0) >= desired
+    and status.get("updatedReplicas", 0) == desired
+    and status.get("replicas", 0) == desired
+    and status.get("readyReplicas", 0) == desired
+    and status.get("availableReplicas", 0) == desired
+    and status.get("unavailableReplicas", 0) == 0
 )
 raise SystemExit(0 if ok else 1)
 '; then
-      echo "deployment/$deployment generation observed with updated replicas"
+      echo "deployment/$deployment completed rollout with no old replicas"
       return 0
     fi
     sleep 3
   done
-  echo "deployment/$deployment did not observe its updated replicas in ${timeout}s" >&2
+  echo "deployment/$deployment did not complete its rollout in ${timeout}s" >&2
   return 1
 }
 
