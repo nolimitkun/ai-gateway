@@ -3,9 +3,10 @@
 # budget is per proxy instance and the coarsest local window is an hour, so a
 # daily quota needs the global (external) rate limit service instead.
 #
-# `unit: Tokens` charges the LLM token count of the response, which is the
-# same budget model as Kuadrant's TokenRateLimitPolicy and Envoy AI Gateway's
-# metadata cost, expressed in one field.
+# Token units require an agentgateway AI backend with tokenization enabled.
+# KServe's InferencePool integration is a generic Gateway API backend and does
+# not publish agentgateway's AI token metadata, so this path intentionally
+# compares request and quota limits only rather than claiming an inert budget.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
@@ -23,11 +24,6 @@ spec:
           policy:
             local:
               - requests: 5
-                unit: Minutes
-        - condition: '"x-token-limit-probe" in request.headers'
-          policy:
-            local:
-              - tokens: 100
                 unit: Minutes
         - condition: '"x-quota-probe" in request.headers'
           policy:

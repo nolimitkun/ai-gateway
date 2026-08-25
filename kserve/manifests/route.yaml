@@ -12,7 +12,23 @@ spec:
       kind: Gateway
       name: ai-gateway
   rules:
-    - matches:
+    # The exact chat rule is named so gateways with route-scoped extension
+    # policies can attach semantic routing without sending embeddings,
+    # reranking, model-catalog, or audio requests through a chat-only ext_proc
+    # server. The /v1 fallback preserves the single public KServe path.
+    - name: chat
+      matches:
+        - path:
+            type: Exact
+            value: /v1/chat/completions
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-mock-inference-pool
+      timeouts:
+        request: 60s
+    - name: inference
+      matches:
         - path:
             type: PathPrefix
             value: /v1

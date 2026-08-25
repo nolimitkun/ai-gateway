@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Add the vLLM Semantic Router to all three stacks, then remove it with
+# Add the vLLM Semantic Router to one selected stack, then remove it with
 # --delete.
 #
 # The router is an Envoy external processor. The same workload and the same
@@ -8,7 +8,7 @@
 # EnvoyFilter for the OpenShift profile, an EnvoyExtensionPolicy for Envoy AI
 # Gateway, and one field of an AgentgatewayPolicy for agentgateway.
 #
-# Like the feature policies, this layer is opt-in: `make up` measures routing
+# Like the feature policies, this layer is opt-in: `make up CLUSTER=<name>` measures routing
 # on its own, and only a request whose model is "auto" is resolved here.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +18,33 @@ AGENT_CTX=kind-ai-gw-agent
 CONFIG="$ROOT/semantic-router/config/router-config.yaml"
 MANIFESTS="$ROOT/semantic-router/manifests"
 DELETE=false
-[[ "${1:-}" == "--delete" ]] && DELETE=true
+SELECTED_CONTEXT=""
+while (($#)); do
+  case "$1" in
+    --delete)
+      DELETE=true
+      shift
+      ;;
+    --context)
+      [[ -n "${2:-}" ]] || { echo "--context requires a kubectl context" >&2; exit 2; }
+      SELECTED_CONTEXT="$2"
+      shift 2
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$SELECTED_CONTEXT" in
+  "$KUADRANT_CTX"|"$ENVOY_CTX"|"$AGENT_CTX") ;;
+  *) echo "unsupported semantic-router context: $SELECTED_CONTEXT" >&2; exit 2 ;;
+esac
+
+context_selected() {
+  [[ "$SELECTED_CONTEXT" == "$1" ]]
+}
 
 # An attachment that was applied is not yet an attachment the proxy is using.
 # Two of the three report a status; waiting on it also surfaces a policy the
@@ -57,6 +83,7 @@ attachment_for() {
 
 if $DELETE; then
   for ctx in "$KUADRANT_CTX" "$ENVOY_CTX" "$AGENT_CTX"; do
+    context_selected "$ctx" || continue
     echo "==> removing the semantic router from $ctx"
     # The attachment goes first: a gateway still calling an ext_proc service
     # that no longer exists would fail open on every request until the filter
@@ -70,6 +97,7 @@ if $DELETE; then
 fi
 
 for ctx in "$KUADRANT_CTX" "$ENVOY_CTX" "$AGENT_CTX"; do
+  context_selected "$ctx" || continue
   echo "==> semantic router workload in $ctx"
   kubectl --context "$ctx" -n ai-demo create configmap semantic-router-config \
     --from-file=router-config.yaml="$CONFIG" \
@@ -86,7 +114,7 @@ for ctx in "$KUADRANT_CTX" "$ENVOY_CTX" "$AGENT_CTX"; do
   case "$ctx" in
     "$ENVOY_CTX") wait_condition "$ctx" envoyextensionpolicy/semantic-router Accepted ;;
     "$AGENT_CTX") wait_condition "$ctx" agentgatewaypolicy/kserve-mock-semantic-router Accepted ;;
-    # An EnvoyFilter has no status to wait on. `make compare` waits for the
+    # An EnvoyFilter has no status to wait on. `make compare CLUSTER=<name>` waits for the
     # data plane itself before it measures anything, which is the only check
     # that covers this stack.
     *) echo "EnvoyFilter applied; Istio reports no status for it" ;;
@@ -95,7 +123,7 @@ done
 
 cat <<'EOF'
 
-OK: the semantic router is attached to all three gateways.
+OK: the semantic router is attached to the selected gateway context.
 
 A request naming a model is routed to that model, exactly as before. A request
 asking for "auto" is resolved by the router from the prompt, and the answer
@@ -107,5 +135,5 @@ reports which model actually served it:
 
   # -> "model": "kimi-k3", "mock_tier": "big"
 
-Run 'make compare' to measure the decision through all three gateways.
+Run 'make compare CLUSTER=<name>' to record the selected gateway.
 EOF

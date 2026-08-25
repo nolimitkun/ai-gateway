@@ -19,6 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: install validation dependency
+        run: python3 -m pip install -r requirements-dev.txt
+
       - name: mock runtime tests
         run: make test
 

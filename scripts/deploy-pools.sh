@@ -1,22 +1,39 @@
 #!/usr/bin/env bash
-# Deploy one KServe serving pool per accelerator class into all three gateway
-# clusters. The shared kserve-mock service stays in place: it keeps serving the
+# Deploy one KServe serving pool per accelerator class into one gateway
+# cluster. The shared kserve-mock service stays in place: it keeps serving the
 # CPU fixture models and every request that arrives without an x-model-class
-# header. Run scripts/deploy-kserve.sh (or `make up`) first.
+# header. Run scripts/deploy-kserve.sh or `make up CLUSTER=<name>` first.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 POOLS=(b300 h200 h100 l40s)
-CONTEXTS=(kind-ai-gw-kuadrant kind-ai-gw-envoy kind-ai-gw-agent)
+DELETE=false
+ctx=""
+base=""
+while (($#)); do
+  case "$1" in
+    --delete) DELETE=true; shift ;;
+    --context)
+      [[ -n "${2:-}" ]] || { echo "--context requires a kubectl context" >&2; exit 2; }
+      ctx="$2"
+      shift 2
+      ;;
+    --base-url)
+      [[ -n "${2:-}" ]] || { echo "--base-url requires a URL" >&2; exit 2; }
+      base="$2"
+      shift 2
+      ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+case "$ctx" in kind-ai-gw-kuadrant) base="${base:-http://localhost:8082}" ;; kind-ai-gw-envoy) base="${base:-http://localhost:8080}" ;; kind-ai-gw-agent) base="${base:-http://localhost:8081}" ;; *) echo "--context must name one comparison context" >&2; exit 2 ;; esac
 
-if [[ "${1:-}" == "--delete" ]]; then
-  for ctx in "${CONTEXTS[@]}"; do
-    echo "==> removing accelerator pools from $ctx"
-    if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
-      kubectl --context "$ctx" delete -k "$ROOT/kuadrant/pools-overlay" --ignore-not-found
-    else
-      kubectl --context "$ctx" delete -k "$ROOT/kserve/pools" --ignore-not-found
-    fi
-  done
+if $DELETE; then
+  echo "==> removing accelerator pools from $ctx"
+  if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
+    kubectl --context "$ctx" delete -k "$ROOT/kuadrant/pools-overlay" --ignore-not-found
+  else
+    kubectl --context "$ctx" delete -k "$ROOT/kserve/pools" --ignore-not-found
+  fi
   echo "OK: accelerator pools removed; the shared KServe path is untouched"
   exit 0
 fi
@@ -24,12 +41,12 @@ fi
 require_base() {
   local ctx="$1"
   if ! kubectl --context "$ctx" -n ai-demo get configmap mock-llm-src >/dev/null 2>&1; then
-    echo "mock-llm-src is missing in $ctx; run 'make runtime' first" >&2
+    echo "mock-llm-src is missing in $ctx; run 'make runtime CLUSTER=<name>' first" >&2
     return 1
   fi
   if [[ "$ctx" == "kind-ai-gw-kuadrant" ]] &&
      ! kubectl --context "$ctx" -n ai-demo get configmap kserve-mock-epp-ca >/dev/null 2>&1; then
-    echo "kserve-mock-epp-ca is missing in $ctx; run 'make kserve' first" >&2
+    echo "kserve-mock-epp-ca is missing in $ctx; run 'make kserve CLUSTER=ai-gw-kuadrant' first" >&2
     return 1
   fi
 }
@@ -63,29 +80,27 @@ wait_for_route_accepted() {
   return 1
 }
 
-for ctx in "${CONTEXTS[@]}"; do
-  echo "==> accelerator pools in $ctx"
-  require_base "$ctx"
-  if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
-    kubectl --context "$ctx" apply -k "$ROOT/kuadrant/pools-overlay"
-    for pool in "${POOLS[@]}"; do
-      kubectl --context "$ctx" -n ai-demo wait "certificate/kserve-$pool-epp-server" \
-        --for=condition=Ready --timeout=3m
-    done
-  else
-    kubectl --context "$ctx" apply -k "$ROOT/kserve/pools"
-  fi
+echo "==> accelerator pools in $ctx"
+require_base "$ctx"
+if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
+  kubectl --context "$ctx" apply -k "$ROOT/kuadrant/pools-overlay"
   for pool in "${POOLS[@]}"; do
-    wait_for_deployment "$ctx" "kserve-$pool-kserve"
-    wait_for_deployment "$ctx" "kserve-$pool-kserve-router-scheduler"
-    wait_for_route_accepted "$ctx" "kserve-$pool"
-    kubectl --context "$ctx" -n ai-demo wait "llminferenceservice/kserve-$pool" \
-      --for=condition=Ready --timeout=5m
-    if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
-      kubectl --context "$ctx" -n ai-demo wait "backendtlspolicy/kserve-$pool-epp" \
-        --for=jsonpath='{.status.ancestors[0].conditions[0].status}'=True --timeout=3m
-    fi
+    kubectl --context "$ctx" -n ai-demo wait "certificate/kserve-$pool-epp-server" \
+      --for=condition=Ready --timeout=3m
   done
+else
+  kubectl --context "$ctx" apply -k "$ROOT/kserve/pools"
+fi
+for pool in "${POOLS[@]}"; do
+  wait_for_deployment "$ctx" "kserve-$pool-kserve"
+  wait_for_deployment "$ctx" "kserve-$pool-kserve-router-scheduler"
+  wait_for_route_accepted "$ctx" "kserve-$pool"
+  kubectl --context "$ctx" -n ai-demo wait "llminferenceservice/kserve-$pool" \
+    --for=condition=Ready --timeout=5m
+  if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
+    kubectl --context "$ctx" -n ai-demo wait "backendtlspolicy/kserve-$pool-epp" \
+      --for=jsonpath='{.status.ancestors[0].conditions[0].status}'=True --timeout=3m
+  fi
 done
 
 # Each pool answers only for the models its cards are sized for, so the served
@@ -106,6 +121,7 @@ check_pool() {
     body="{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
   fi
   curl -sS --fail-with-body -m 25 "$base$path" \
+    "${AUTH_HEADER[@]}" \
     -H 'content-type: application/json' \
     -H "x-model-class: $pool" \
     -d "$body" |
@@ -128,11 +144,16 @@ if accelerator != '$pool' or not pod.startswith('kserve-$pool-'):
 print('$pool -> ' + accelerator + ' on ' + pod)"
 }
 
-for base in http://localhost:8082 http://localhost:8080 http://localhost:8081; do
-  echo "==> $base"
-  for pool in "${POOLS[@]}"; do
-    check_pool "$base" "$pool"
-  done
+AUTH_HEADER=()
+token="$(curl -sS -m 20 "$base/realms/ai-gateway/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=ai-gateway-cli -d username=alice -d password=alice 2>/dev/null |
+  python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("access_token", ""))
+except Exception: print("")')"
+[[ -z "$token" ]] || AUTH_HEADER=(-H "authorization: Bearer $token")
+echo "==> $base"
+for pool in "${POOLS[@]}"; do
+  check_pool "$base" "$pool"
 done
 
-echo "OK: B300, H200, H100, and L40S pools ready in all clusters"
+echo "OK: B300, H200, H100, and L40S pools ready in $ctx"

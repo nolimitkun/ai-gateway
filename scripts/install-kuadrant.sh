@@ -3,7 +3,9 @@
 # Kuadrant policies on an Istio control plane and Envoy gateway proxy.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CTX="kind-ai-gw-kuadrant"
+[[ $# -eq 1 ]] || { echo "usage: $0 kind-ai-gw-kuadrant" >&2; exit 2; }
+CTX="$1"
+[[ "$CTX" == kind-ai-gw-kuadrant ]] || { echo "install-kuadrant.sh only supports kind-ai-gw-kuadrant" >&2; exit 2; }
 GWAPI_VERSION="${GWAPI_VERSION:-1.4.1}"
 GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
 ISTIO_VERSION="${ISTIO_VERSION:-1.29.2}"

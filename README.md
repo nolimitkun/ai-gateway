@@ -9,9 +9,9 @@ Gateway -> HTTPRoute -> InferencePool -> llm-d endpoint picker -> model pod
 
 The default deployment is a deterministic CPU fixture for comparing routing,
 OpenAI-compatible APIs, and gateway behavior on kind. An optional policy layer
-adds Keycloak authentication, authorization, rate limits, quotas, token budgets,
-and CORS. A separate production package deploys real, task-specific vLLM
-services on NVIDIA GPUs.
+adds Keycloak authentication, authorization, rate limits, and quotas, then
+compares which paths can enforce token budgets and CORS. A separate production
+package deploys real, task-specific vLLM services on NVIDIA GPUs.
 
 Shared components are pinned once per cluster: KServe 0.20.0 and Keycloak
 26.4.0. All Helm charts and CRD schemas are vendored in the repository.
@@ -37,9 +37,10 @@ between the three gateways.
 | Authorization rules | Pattern matching, CEL, or OPA Rego | Claim/header rules; first match wins | CEL `matchExpressions`; Allow, Deny, or Require |
 | Request rate limits | `RateLimitPolicy` | `BackendTrafficPolicy`, local or global | `traffic.rateLimit`, local or global |
 | Long quota windows | Any window through 24 hours in the same policy | Day, Month, or Year | Local mode stops at Hours; longer windows require global rate limiting |
-| Token budgets | `TokenRateLimitPolicy` reads response `usage.total_tokens` | `llmRequestCosts` through the AI Gateway ext-proc | `unit: Tokens` descriptor |
+| Token budgets | `TokenRateLimitPolicy` reads response `usage.total_tokens` | `llmRequestCosts` through the AI Gateway ext-proc | `unit: Tokens` requires an agentgateway AI backend with tokenization; unavailable on this generic KServe `InferencePool` |
 | Counter storage | Limitador installed by the operator | External Redis and rate-limit service for global limits | In-process for local limits |
-| Per-identity buckets | CEL counters over authenticated identity | Header descriptors | CEL descriptors in global mode; local mode is shared per proxy |
+| Per-identity buckets | CEL counters are supported; this pinned Istio fixture uses shared probe buckets because Authorino identity metadata is not exposed to the 1.5.2 Wasm rate-limit action | Header descriptors | CEL descriptors in global mode; local mode is shared per proxy |
+| CORS | No Kuadrant CORS policy; not enabled in this Istio fixture | `SecurityPolicy` `cors` | `traffic.cors` |
 | LLM request shaping | Not provided by the compared policy | `AIGatewayRoute` body/header mutation | Model aliases, prompt prepend/append, and caching |
 | Prompt guardrails | Not provided by the compared policy | Not provided by the compared policy | `backend.ai.promptGuard` |
 | Provider credentials | Not provided by the compared policy | `BackendSecurityPolicy` | Backend authentication on `AgentgatewayBackend` |
@@ -48,44 +49,46 @@ between the three gateways.
 
 ### Live comparison
 
-`make compare` replaces everything between the markers below with the table
-it measured. After each successful scheduled or manually dispatched run, the
-workflow commits the updated README. These are regression smoke tests against
-a zero-delay Python runtime, not production performance benchmarks.
+`make compare CLUSTER=<name>` measures one running cluster and writes one
+ignored JSON fragment under `compare/results/`. `make comparison-summary`
+requires all three fragments and replaces everything between the markers below
+with their merged table. The workflow performs those steps sequentially and
+commits the updated README. These are regression smoke tests against a
+zero-delay Python runtime, not production performance benchmarks.
 
 <!-- comparison-results:start -->
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last live comparison (UTC) | 2026-08-24 15:52 (30 requests) | 2026-08-24 15:52 (30 requests) | 2026-08-24 15:52 (30 requests) |
+| Last isolated comparison (UTC) | 2026-08-25 10:23 (30 requests) | 2026-08-25 10:09 (30 requests) | 2026-08-25 10:13 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
 | Workload replicas | 2/2 | 2/2 | 2/2 |
 | KServe-owned Deployments, Services, and Pool | 5 | 5 | 5 |
-| Latest routing sample | 30/30 HTTP 200, 2 pods, 0 unknown | 30/30 HTTP 200, 2 pods, 0 unknown | 30/30 HTTP 200, 2 pods, 0 unknown |
+| Latest routing sample | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods |
 | Streaming usage chunk | Yes | Yes | Yes |
+| Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
+| Tiered chat models | big/medium/small | big/medium/small | big/medium/small |
 | Embeddings API | Yes | Yes | Yes |
+| RAG embedding models | Yes | Yes | Yes |
 | Reranking API | Yes | Yes | Yes |
-| Model catalog | Not recorded | Not recorded | Not recorded |
-| Tiered chat models | Not recorded | Not recorded | Not recorded |
-| RAG embedding models | Not recorded | Not recorded | Not recorded |
 | Speech-to-text API | Yes | Yes | Yes |
-| Speaker diarization | Not recorded | Not recorded | Not recorded |
-| Local chat p50 | 299 ms | 230 ms | 307 ms |
-| Policy objects reporting ready | Baseline `RateLimitPolicy`: Yes | Not measured | Not measured |
-| Keycloak token issuance | Not measured | Not measured | Not measured |
-| Authentication: anonymous / forged / valid | Not measured | Not measured | Not measured |
-| Authorization: guest / non-admin B300 / admin B300 | Not measured | Not measured | Not measured |
-| Request rate limit | Not measured | Not measured | Not measured |
-| Quota limit | Not measured | Not measured | Not measured |
-| Token limit | Not measured | Not measured | Not measured |
-| CORS preflight answered | Not measured | Not measured | Not measured |
-| Semantic router ext_proc attachment | Not measured | Not measured | Not measured |
-| Auto model selection: reasoning / code / chat | Not measured | Not measured | Not measured |
-| Model and prompt the runtime received | Not measured | Not measured | Not measured |
-| Decision headers returned to the client | Not measured | Not measured | Not measured |
-| Auto-routed chat p50 | Not measured | Not measured | Not measured |
+| Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
+| Local chat p50 | 38 ms | 42 ms | 55 ms |
+| Policy objects reporting ready | 3/3 | 3/3 | 5/5 |
+| Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
+| Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
+| Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
+| Decision headers returned to the client | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk |
+| Auto-routed chat p50 | 70 ms | 35 ms | 26 ms |
+| Keycloak token issuance | Yes | Yes | Yes |
+| Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
+| Authorization: guest / non-admin B300 / admin B300 | 403 / 403 / 200 | 403 / 403 / 200 | 403 / 403 / 200 |
+| Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
+| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
+| Token limit (100 tokens per minute) | 429 on request 3 of 6 | 429 on request 3 of 6 | Not available on KServe InferencePool |
+| CORS preflight answered | No (HTTP 405) | Yes (HTTP 200) | Yes (HTTP 200) |
 
 <!-- comparison-results:end -->
 
@@ -98,99 +101,279 @@ Three operational differences explain most of the matrix:
 - Kuadrant includes Limitador, Envoy global rate limiting needs Redis and a
   rate-limit service, and agentgateway local limits live in each proxy.
 - Daily quotas are native to Kuadrant and Envoy. agentgateway needs global mode
-  for both long windows and identity-keyed buckets.
+  for both long windows and identity-keyed buckets; its local demo uses Hours.
 - Envoy token accounting runs through `AIGatewayRoute` ext-proc traffic. The
   repository therefore protects both that generated route and the ordinary
   `HTTPRoute`, and sends both to the same `InferencePool`.
+- Kuadrant and Envoy enforce token budgets on the generic KServe path.
+  agentgateway token units require its AI-backend tokenization metadata, which
+  a Gateway API `InferencePool` does not publish.
 
 ## Quick start
 
-Prerequisites: Docker, kind, kubectl, Helm, curl, and Python 3.
+Prerequisites: Docker, kind, kubectl, Helm, curl, and Python 3. Install the
+offline validator dependency once with
+`python3 -m pip install -r requirements-dev.txt`.
 
 ```bash
-make up
-make compare
+make up CLUSTER=ai-gw-kuadrant
+make policies CLUSTER=ai-gw-kuadrant
+make semantic-router CLUSTER=ai-gw-kuadrant
+make compare CLUSTER=ai-gw-kuadrant
+make stop-cluster CLUSTER=ai-gw-kuadrant
 ```
 
-`make up` creates one kind cluster per gateway stack. The separate clusters
-prevent one installer from upgrading another stack's cluster-scoped Gateway
-API or inference-extension CRDs.
-
-Add the optional security and traffic layer:
+Repeat with `ai-gw-envoy` and `ai-gw-agent`, then merge the independently saved
+results into the summary table:
 
 ```bash
-make policies
-make compare
+make comparison-summary
 ```
 
-Add the optional semantic routing layer:
+Every ordinary lifecycle command targets exactly one cluster through the same
+`CLUSTER` variable. The separate clusters prevent one installer from upgrading
+another stack's cluster-scoped Gateway API or inference-extension CRDs.
+
+The explicit all-cluster helpers perform the same work sequentially and leave
+every cluster stopped:
 
 ```bash
-make semantic-router
-make compare
+make up-all
+make features-all
+make compare-all
 ```
 
-Useful lifecycle and validation targets:
+`compare-all` starts and cold-start-checks one retained node, writes
+`compare/results/<cluster>.json`, stops that node, and only then starts the next
+one. After the third result it refreshes the comparison table in this README.
+
+Useful single-cluster lifecycle commands:
 
 ```bash
-make status
-make pools
-make pools-down
-make policies-down
-make semantic-router-down
+make start-cluster CLUSTER=ai-gw-envoy
+make status CLUSTER=ai-gw-envoy
+make pools CLUSTER=ai-gw-envoy
+make pools-down CLUSTER=ai-gw-envoy
+make policies-down CLUSTER=ai-gw-envoy
+make semantic-router-down CLUSTER=ai-gw-envoy
+make stop-cluster CLUSTER=ai-gw-envoy
+make down CLUSTER=ai-gw-envoy
+```
+
+Repository-wide commands that do not target a cluster:
+
+```bash
+make stop-clusters
 make test
 make validate
 make agent-ui
-make down
+make down-all
 ```
 
 `make agent-ui` exposes the agentgateway UI at <http://localhost:15000/ui>.
 
+Stopping a cluster only stops its Docker node container. It retains all
+Kubernetes resources and images. `make down` is different: it deletes the
+selected cluster; `make down-all` deletes all three.
+
+On a retained Kuadrant cluster, `make start-cluster` also waits for the
+operator's in-cluster Wasm server and then rolls the Istio gateway proxy once.
+This prevents Envoy from caching a fail-closed Wasm download attempted before
+the operator recovered. The other stacks need no equivalent proxy restart.
+
+## Deployment dependencies and versions
+
+The automated path requires Docker, kind, kubectl, Helm, curl, Python 3 with
+the packages in `requirements-dev.txt`, and outbound access during first
+installation for CRD manifests and container images. The controller charts are
+vendored, but their images still have to be present or pullable. Each Kind
+cluster is a single Kubernetes 1.36.1 node.
+
+| Layer | Shared or stack-specific dependency | Pinned version |
+|---|---|---|
+| Kubernetes | One independent Kind cluster per gateway | 1.36.1 (`kindest/node` digest pinned) |
+| Gateway API Inference Extension | Required before gateway and KServe controllers | 1.5.0 |
+| KServe LLMInferenceService | Shared inference controller in each cluster | 0.20.0 |
+| cert-manager | KServe webhooks; also endpoint-picker TLS in the OpenShift profile | 1.17.0 |
+| Identity | Keycloak realm imported independently in each cluster | 26.4.0 |
+| OpenShift profile | Gateway API 1.4.1, Istio, then Kuadrant | Istio 1.29.2; Kuadrant 1.5.2 |
+| Envoy path | Envoy Gateway, then Envoy AI Gateway | 1.8.1; 1.0.0 |
+| agentgateway path | Gateway API 1.6.0, then agentgateway | 1.4.1 |
+| Optional semantic router | Runs after the KServe route exists | 0.3.0 |
+
+Install order is enforced independently for each cluster: Kind node and CRDs →
+selected gateway controller → KServe controller → mock runtime ConfigMap →
+Gateway → `LLMInferenceService` and route → optional Keycloak policies →
+optional semantic router. The Envoy policy installer also corrects the
+vendored Envoy Gateway 1.8.1 `BackendTrafficPolicy` int32 schema maximum before
+applying limits.
+
 ## Architecture
 
-Each kind cluster has the same KServe workload, scheduler, pool, route, and
-model API. Only the gateway implementation and its policy resources change.
+Each schema below is one complete Kind cluster. All three contain the same
+KServe desired state—one `LLMInferenceService`, its scheduler/EPP,
+`InferencePool`, two CPU model pods, Keycloak, and the optional semantic
+router—but no component is shared across clusters.
+
+### OpenShift profile: Kuadrant + Istio/Envoy
 
 ```mermaid
-flowchart LR
-  CLIENT["OpenAI-compatible client"]
+flowchart TB
+  C["Client<br/>localhost:8082"] --> KP["Kind host port"] --> GW
 
-  subgraph Gateways["one gateway stack per cluster"]
-    KU["Kuadrant policies"] --> KUOS["Istio control plane<br/>Envoy proxy"]
-    EAIG["Envoy AI Gateway<br/>Envoy Gateway"]
-    AG["agentgateway<br/>Rust proxy"]
+  subgraph K["ai-gw-kuadrant · Kubernetes 1.36.1"]
+    subgraph OI["openshift-ingress"]
+      GW["Gateway/openshift-ai-inference<br/>Istio-managed Envoy proxy"]
+      EF["EnvoyFilter/semantic-router<br/>chat rule only"] -. programs .-> GW
+    end
+    subgraph KSYS["istio-system + kuadrant-system"]
+      ISTIOD["istiod 1.29.2"] --> GW
+      KOP["Kuadrant operator 1.5.2"] --> WASM["Wasm auth/rate-limit actions"] --> GW
+      AUTH["Authorino"] <-->|"JWT/authz"| WASM
+      LIM["Limitador"] <-->|"request + token counters"| WASM
+    end
+    subgraph APP["ai-demo"]
+      KR["HTTPRoute/keycloak<br/>/realms"] --> KC["Keycloak 26.4.0"]
+      R["HTTPRoute/kserve-mock<br/>chat Exact + /v1 prefix"] --> P["InferencePool"]
+      AP["AuthPolicy"] -.-> WASM
+      RP["RateLimitPolicy"] -.-> WASM
+      TP["TokenRateLimitPolicy"] -.-> WASM
+      SR["semantic-router 0.3.0<br/>gRPC ext_proc :50051"] <-->|"chat body/header rewrite"| EF
+      TLS["Certificate + BackendTLSPolicy"] -.-> P
+      P --> EPP["llm-d EPP/scheduler"] --> PODS["2 mock model pods"]
+      LLM["LLMInferenceService/kserve-mock"]
+    end
+    subgraph KSV["kserve + cert-manager"]
+      CTRL["KServe controller 0.20.0"] --> LLM
+      CTRL --> P
+      CTRL --> EPP
+      CTRL --> PODS
+      CM["cert-manager 1.17.0"] --> TLS
+    end
+    GW --> KR
+    GW --> R
   end
-
-  subgraph GatewayAPI["Gateway API"]
-    GW["Gateway"] --> ROUTE["HTTPRoute/kserve-mock"]
-    ROUTE --> POOL["InferencePool"]
-  end
-
-  subgraph KServe["KServe 0.20.0"]
-    CTRL["LLMInferenceService controller"]
-    LLMISVC["LLMInferenceService/kserve-mock"]
-    EPP["llm-d endpoint picker"]
-    PODS["2 model pods"]
-  end
-
-  CLIENT --> KUOS
-  CLIENT --> EAIG
-  CLIENT --> AG
-  KUOS --> GW
-  EAIG --> GW
-  AG --> GW
-  POOL --> EPP
-  EPP --> PODS
-  GW --> PODS
-  CTRL --> LLMISVC
-  CTRL --> POOL
-  CTRL --> EPP
-  CTRL --> PODS
 ```
 
-The OpenShift profile applies a Kustomize overlay that changes the Gateway
-reference to `openshift-ingress/openshift-ai-inference` and supplies the
-trusted endpoint-picker certificate chain required by Istio.
+| Specification | Value |
+|---|---|
+| Cluster / context | `ai-gw-kuadrant` / `kind-ai-gw-kuadrant` |
+| Public endpoint | `http://localhost:8082`; one OpenShift-style shared Gateway in `openshift-ingress` |
+| Control/data plane | Kuadrant 1.5.2 and Istio 1.29.2 program an Envoy gateway proxy |
+| Gateway API versions | Gateway API 1.4.1; Inference Extension 1.5.0 |
+| Security | Keycloak JWT, group/B300 authorization through `AuthPolicy` and Authorino |
+| Limits | Limitador-backed request, quota, and response `usage.total_tokens` accounting; fixture probe buckets are shared |
+| Semantic routing | Raw Istio `EnvoyFilter`; disabled by default and enabled only on the named `chat` route rule |
+| KServe connection | `HTTPRoute` → `InferencePool` → TLS-protected EPP → two model pods |
+| Not provided in this profile | Native Kuadrant CORS or ext_proc policy; CORS probe returns HTTP 405 |
+
+This profile's Kustomize overlays change the route parent to
+`openshift-ingress/openshift-ai-inference` and add the trusted endpoint-picker
+certificate topology used to approximate OpenShift AI closely on Kind.
+
+### Envoy AI Gateway
+
+```mermaid
+flowchart TB
+  C["Client<br/>localhost:8080"] --> KP["Kind host port"] --> GW
+
+  subgraph K["ai-gw-envoy · Kubernetes 1.36.1"]
+    subgraph EGS["envoy-gateway-system"]
+      EGC["Envoy Gateway 1.8.1 controller"] --> GW["Gateway/ai-gateway<br/>Envoy proxy"]
+      RLS["Envoy global rate-limit service"] <-->|"descriptors/cost"| GW
+    end
+    subgraph AIS["envoy-ai-gateway-system"]
+      AIC["Envoy AI Gateway 1.0.0 controller"] --> AIR
+      AIC --> AIP["AI ext_proc<br/>token metadata"] --> GW
+    end
+    subgraph REDIS["redis-system"]
+      RD["Redis<br/>global counter storage"] <-->|"state"| RLS
+    end
+    subgraph APP["ai-demo"]
+      KR["HTTPRoute/keycloak<br/>/realms"] --> KC["Keycloak 26.4.0"]
+      R["HTTPRoute/kserve-mock<br/>chat Exact + /v1 prefix"] --> P["InferencePool"]
+      AIR["AIGatewayRoute/kserve-mock-ai<br/>Host ai.local"]
+      AIR --> P
+      SP["SecurityPolicy<br/>JWT + authz + CORS"] -.-> GW
+      BP["BackendTrafficPolicy<br/>request/quota/token cost"] -.-> GW
+      EP["EnvoyExtensionPolicy<br/>sectionName: chat"] -.-> GW
+      SR["semantic-router 0.3.0<br/>gRPC ext_proc :50051"] <-->|"chat rewrite"| EP
+      P --> EPP["llm-d EPP/scheduler"] --> PODS["2 mock model pods"]
+      LLM["LLMInferenceService/kserve-mock"]
+    end
+    subgraph KSV["kserve + cert-manager"]
+      CTRL["KServe controller 0.20.0"] --> LLM
+      CTRL --> P
+      CTRL --> EPP
+      CTRL --> PODS
+      CM["cert-manager 1.17.0"]
+    end
+    GW --> KR
+    GW --> R
+  end
+```
+
+| Specification | Value |
+|---|---|
+| Cluster / context | `ai-gw-envoy` / `kind-ai-gw-envoy` |
+| Public endpoint | `http://localhost:8080`; `Gateway/ai-gateway` in `ai-demo` |
+| Control/data plane | Envoy Gateway 1.8.1 plus Envoy AI Gateway 1.0.0 program an Envoy proxy |
+| Gateway API versions | Inference Extension 1.5.0; Envoy Gateway supplies its Gateway API CRDs |
+| Security | `SecurityPolicy` verifies Keycloak JWT, exports user/plan headers, applies group authorization and CORS |
+| Limits | `BackendTrafficPolicy` global limits; Envoy rate-limit service stores keyed counters in Redis |
+| Token path | `Host: ai.local` uses `AIGatewayRoute`; AI ext_proc publishes `llm_total_token` consumed as response cost |
+| Semantic routing | `EnvoyExtensionPolicy` targets only `HTTPRoute` rule `chat`; non-chat `/v1` APIs bypass it |
+| KServe connection | Both ordinary and AI-generated HTTP routes end at the same KServe `InferencePool` and EPP |
+| Installer compatibility fix | Clamps the invalid uint32 maximum in the 1.8.1 int32 `BackendTrafficPolicy` CRD |
+
+### agentgateway
+
+```mermaid
+flowchart TB
+  C["Client<br/>localhost:8081"] --> KP["Kind host port"] --> GW
+
+  subgraph K["ai-gw-agent · Kubernetes 1.36.1"]
+    subgraph AGS["agentgateway-system"]
+      AGC["agentgateway controller 1.4.1"] --> GW
+    end
+    subgraph APP["ai-demo"]
+      GW["Gateway/ai-gateway<br/>Rust proxy"]
+      UI["agentgateway UI :15000<br/>make agent-ui"] --- GW
+      KR["HTTPRoute/keycloak<br/>/realms"] --> KC["Keycloak 26.4.0"]
+      R["HTTPRoute/kserve-mock<br/>chat Exact + /v1 prefix"] --> P["InferencePool"]
+      JWT["AgentgatewayPolicy<br/>JWT authentication"] -.-> GW
+      AZ["AgentgatewayPolicy<br/>member + B300 authorization"] -.-> GW
+      RL["AgentgatewayPolicy<br/>local request/quota counters"] -.-> GW
+      CORS["AgentgatewayPolicy<br/>CORS"] -.-> GW
+      EP["AgentgatewayPolicy extProc<br/>CEL path == chat"] -.-> GW
+      SR["semantic-router 0.3.0<br/>gRPC ext_proc :50051"] <-->|"chat rewrite"| EP
+      P --> EPP["llm-d EPP/scheduler"] --> PODS["2 mock model pods"]
+      LLM["LLMInferenceService/kserve-mock"]
+    end
+    subgraph KSV["kserve + cert-manager"]
+      CTRL["KServe controller 0.20.0"] --> LLM
+      CTRL --> P
+      CTRL --> EPP
+      CTRL --> PODS
+      CM["cert-manager 1.17.0"]
+    end
+    GW --> KR
+    GW --> R
+  end
+```
+
+| Specification | Value |
+|---|---|
+| Cluster / context | `ai-gw-agent` / `kind-ai-gw-agent` |
+| Public endpoint | `http://localhost:8081`; UI through `make agent-ui` at `http://localhost:15000/ui` |
+| Control/data plane | agentgateway 1.4.1 controller and Rust proxy |
+| Gateway API versions | Gateway API 1.6.0; Inference Extension 1.5.0 |
+| Security | Separate `AgentgatewayPolicy` resources for Keycloak JWT, group membership, B300 authorization, and CORS |
+| Limits | In-process local request/minute and quota/hour counters, shared per proxy; global mode is required for durable keyed windows |
+| Token boundary | Generic KServe `InferencePool` does not publish agentgateway AI-backend tokenization metadata, so token units are reported unavailable |
+| Semantic routing | Conditional `traffic.extProc` runs only when `request.path == "/v1/chat/completions"` |
+| KServe connection | `HTTPRoute` → KServe `InferencePool` → EPP → two model pods |
+| Additional native surface | AI backends, prompt guards, model aliases/caching, MCP routing/OAuth, tracing, metrics, and access logs |
 
 ## Runtime profiles
 
@@ -269,9 +452,10 @@ smaller `dimensions` value; other embedding fixtures reject it.
 
 #### Accelerator routing fixture
 
-`make pools` adds one mock serving pool per intended accelerator class. These
-resources validate placement, header routing, pool ownership, and wrong-pool
-errors on kind; they do not turn the Python container into a GPU model server.
+`make pools CLUSTER=<name>` adds one mock serving pool per intended accelerator
+class. These resources validate placement, header routing, pool ownership, and
+wrong-pool errors on kind; they do not turn the Python container into a GPU
+model server.
 
 | Pool | Intended accelerator | Models |
 |---|---|---|
@@ -329,24 +513,36 @@ counts are reference defaults and should be overlaid for the target cluster.
 
 ## Gateway policy test layer
 
-`make up` leaves `/v1` open so routing can be tested without credentials.
-`make policies` installs Keycloak and each gateway's native policy resources
-against the same `HTTPRoute` and `InferencePool`.
+`make up CLUSTER=<name>` leaves that cluster's `/v1` path open so routing can be
+tested without credentials. `make policies CLUSTER=<name>` installs Keycloak
+and the selected gateway's native policy resources against its `HTTPRoute` and
+`InferencePool`.
 
-The configured behavior is identical:
+The common behavior is:
 
 - valid Keycloak access token required; anonymous and forged tokens get 401;
 - `model-users` membership required; B300 additionally requires
   `platform-admins`, producing 403 for an authenticated but unauthorized user;
-- 5 requests per minute;
-- 3 requests per long quota window;
-- 100 LLM tokens per minute, charged from model token usage;
-- CORS preflight for `https://console.example.com`.
+- equivalent opt-in request and quota probes.
+
+The stack-specific edges are intentional and recorded in the live table:
+
+- Kuadrant and Envoy enforce 100 LLM tokens per minute from response usage;
+  agentgateway reports the token probe unavailable on a generic KServe
+  `InferencePool` because token units require its AI-backend tokenization;
+- Envoy and agentgateway answer CORS preflight for
+  `https://console.example.com`; this Kuadrant/Istio profile has no native
+  Kuadrant CORS policy and returns HTTP 405;
+- the pinned Kuadrant profile uses shared opt-in rate/quota/token buckets. The
+  product API supports authenticated CEL counters, but Authorino identity
+  metadata is not exposed to the rate-limit action in this local 1.5.2 Wasm
+  topology. Envoy uses per-user descriptors, while agentgateway local mode is
+  shared per proxy.
 
 Probe headers isolate rate-limit tests from ordinary traffic:
-`x-rate-limit-probe`, `x-quota-probe`, and `x-token-limit-probe`. Kuadrant and
-Envoy use the probe value as a quota key. agentgateway's local quota is shared
-inside the proxy, which is recorded in the canonical comparison table.
+`x-rate-limit-probe`, `x-quota-probe`, and `x-token-limit-probe`. Envoy uses the
+quota probe value as a fresh key. Kuadrant and agentgateway use shared buckets,
+which the comparison output labels explicitly.
 
 ### Test identities
 
@@ -374,23 +570,24 @@ curl "$BASE/v1/chat/completions" \
 
 ## Semantic routing layer
 
-`make semantic-router` puts the [vLLM Semantic
+`make semantic-router CLUSTER=<name>` puts the [vLLM Semantic
 Router](https://github.com/vllm-project/semantic-router) in front of the same
 KServe path, as each gateway's external processor. It is the upstream release
 image, `ghcr.io/vllm-project/semantic-router/extproc:v0.3.0`, deployed
 identically in all three clusters; only the attachment differs, and that is
 what this layer compares.
 
-An attachment object exists before the proxy is using it, so `make
-semantic-router` waits for each policy to report `Accepted`, and `make compare`
-waits for each gateway to actually rewrite an `auto` request before it measures
-anything — the only propagation check that covers the status-less `EnvoyFilter`
-as well. A gateway that never starts routing still records the negative.
+An attachment object exists before the proxy is using it, so the deployment
+command waits for the selected policy to report `Accepted` where that API has a
+status. `make compare CLUSTER=<name>` then tests an actual `auto` rewrite—the
+only propagation check that also covers Kuadrant's status-less `EnvoyFilter`.
+A gateway that never starts routing records the negative in its own result.
 
-This layer's manifests and decisions pass the offline checks below, but the
-rows it adds have not yet been filled in by a live run. Run `make
-semantic-router && make compare`, or dispatch the comparison workflow, to
-record them.
+This layer's manifests and decisions pass the offline checks below and the
+2026-08-25 isolated retest selected the expected reasoning, code, and chat
+model through all three gateways. Run `make semantic-router-all && make
+compare-all`, or dispatch the comparison workflow, to refresh every routing
+detail and latency row together without running the clusters concurrently.
 
 A request that names a model is forwarded unchanged, so every other row in the
 comparison is unaffected. A request whose model is `auto` is resolved by the
@@ -457,7 +654,7 @@ Deployment's resources accordingly; the upstream
 [Helm chart](https://github.com/vllm-project/semantic-router/tree/main/deploy/helm/semantic-router)
 carries a complete example.
 
-## Deployment targets
+## OpenShift versus open-source KServe
 
 Do not install upstream KServe and the OpenShift AI-managed distribution in
 the same cluster.
@@ -465,16 +662,23 @@ the same cluster.
 | Condition | Automated kind reference | Red Hat OpenShift AI guidance |
 |---|---|---|
 | Purpose | Local gateway and API comparison | OpenShift-managed model serving |
-| Platform | kind, Kubernetes 1.36.1 | OpenShift Container Platform 4.19.9 or later |
-| KServe | Upstream 0.20.0 installed by this repository | Managed by Red Hat OpenShift AI 3.5 |
+| Platform | kind, Kubernetes 1.36.1 | OpenShift Container Platform 4.19.9 or later for the referenced distributed-inference procedure |
+| KServe | Upstream 0.20.0 installed by this repository | Managed by the installed Red Hat OpenShift AI release; stable 3.4 includes KServe 0.17.0 |
+| OpenShift AI release | Not installed | Stable supported reference: 3.4; the 3.5 distributed-inference documentation is Early Access as of 2026-08-25 |
 | LLM API | `serving.kserve.io/v1alpha2` | Use the version installed by the selected OpenShift AI release; currently documented as `v1alpha1` |
 | Gateway | Repository installs each GatewayClass and Gateway | Pre-existing GatewayClass and `openshift-ingress/openshift-ai-inference` |
 | Runtime | CPU fixture by default; optional production vLLM package | Enabled OpenShift AI serving runtime, normally vLLM for LLMs |
-| Installation | `make up` | Configure OpenShift AI; do not run `scripts/install-kserve.sh` |
+| Installation | `make up CLUSTER=<name>` | Configure OpenShift AI; do not run `scripts/install-kserve.sh` |
 | Validation here | Automated | Compatibility guidance only |
 
 The automated path also installs Gateway API and Inference Extension CRDs and
 cert-manager 1.17.0. It requires no GPU, model download, or object store.
+
+Red Hat's current supported-configurations matrix lists OpenShift AI 3.4 on
+OpenShift 4.19.9+, 4.20, 4.21, and 4.22. The separate OpenShift AI 3.5 llm-d
+procedure says 4.19.9 or later, but 3.5 is still presented as Early Access.
+Check the matrix for the exact supported pairing before a production install;
+this repository is a behavioral reproduction, not a support statement.
 
 For the OpenShift AI distributed-inference path:
 
@@ -510,11 +714,12 @@ The router's decisions are a ConfigMap, so no CRD schema covers them.
 `make validate` therefore also checks them against the catalog they route to:
 every selectable model is a chat model the runtime serves, every decision
 resolves to exactly one keyword rule at a distinct priority, and the three
-prompts `make compare` sends select three different models — read out of the
-comparison script itself, so a changed prompt or keyword fails the check rather
-than quietly reporting the default model as a routing decision.
+prompts the per-gateway comparison sends select three different models—read
+from `compare/run-gateway.py` itself, so a changed prompt or keyword fails the
+check rather than quietly reporting the default as a routing decision.
 
-`make compare` adds live-cluster assertions:
+`make compare CLUSTER=<name>` adds live-cluster assertions to that gateway's
+saved result:
 
 - Gateway Programmed and route Accepted/ResolvedRefs conditions;
 - KServe readiness and ownership of workload, Services, scheduler, and pool;
@@ -529,9 +734,9 @@ than quietly reporting the default model as a routing decision.
   client, and auto-routed p50 latency when the optional semantic routing layer
   is installed.
 
-Results update the marked rows in this README directly; no separate report is
-created. Offline schema validation cannot prove controller acceptance; only
-the live comparison can do that.
+Each run creates a separate ignored JSON result. `make comparison-summary`
+merges all three into the marked README table. Offline schema validation cannot
+prove controller acceptance; only each live cluster pass can do that.
 
 ### Continuous integration
 
@@ -541,20 +746,15 @@ repositories:
 | Workflow | Scope | Trigger | Typical duration |
 |---|---|---|---|
 | `.github/workflows/checks.yml` | `make test` and `make validate` | Every push and pull request | About 1 minute |
-| `.github/workflows/comparison.yml` | `make up`, optional policies, optional semantic router, and `make compare` | Manual dispatch and Mondays at 06:00 UTC | 45–75 minutes |
+| `.github/workflows/comparison.yml` | Sequential `up-all`, optional features, and `compare-all` | Manual dispatch and Mondays at 06:00 UTC | 60–110 minutes |
 
-The full comparison creates all three kind clusters on one runner. It removes
-unused preinstalled toolchains to free disk space and raises inotify limits for
-the three sets of kubelets and controllers. Manual dispatch accepts whether to
-install policies, whether to install the semantic router, and how many chat
-requests to sample per gateway. Successful
-results replace the marked comparison rows, are committed to `README.md`, and
-are added to the job summary. Failed runs upload pod, policy, and event
-diagnostics for each cluster.
-
-A standard runner provides 4 CPUs and 16 GB RAM for all three stacks. If that
-becomes insufficient, the next scaling step is one cluster per matrix job and a
-final job that merges per-stack comparison fragments.
+The full comparison creates all three retained Kind clusters on one runner but
+runs only one node at a time. Installation, policy attachment, semantic router
+attachment, live probes, and failure diagnostics all rotate through the three
+clusters sequentially. Manual dispatch selects the optional layers and sample
+count. Successful per-cluster JSON results are merged into `README.md`; failed
+runs collect diagnostics by starting and stopping each retained cluster in
+turn.
 
 ## Resource ownership
 
@@ -563,7 +763,7 @@ final job that merges per-stack comparison fragments.
 | Repository | `GatewayClass`, `Gateway`, `HTTPRoute` | Select the gateway and connect `/v1` to KServe |
 | Repository | `LLMInferenceService` and `LLMInferenceServiceConfig` | Declare model workload, replicas, runtime, router, and scheduler |
 | Repository | Keycloak workload, realm, Service, and route | Issue the tokens used by all policy tests |
-| Repository | Stack-native policy resources | Configure equivalent auth, authorization, limits, quota, tokens, and CORS |
+| Repository | Stack-native policy resources | Configure and compare auth, authorization, limits, quota, token accounting, and CORS |
 | OpenShift profile overlay | Shared Gateway refs, cert-manager certificates, `BackendTLSPolicy` | Reproduce the OpenShift namespace and trusted EPP connection |
 | KServe controller | Workload and scheduler Deployments/Services, `InferencePool`, RBAC | Reconcile and operate the inference data path |
 
@@ -634,4 +834,5 @@ compare/                   three-gateway comparison and raw results
 - [Envoy external processing filter](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter)
 - [Kuadrant documentation](https://docs.kuadrant.io/)
 - [OpenShift AI distributed inference](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/deploy_models_using_distributed_inference_with_llm-d/deploying-models-using-distributed-inference_distributed-inference)
+- [OpenShift AI 3.x supported configurations](https://access.redhat.com/articles/rhoai-supported-configs-3.x)
 - [OpenShift Gateway API implementation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html-single/ingress_and_load_balancing/ingress_and_load_balancing)

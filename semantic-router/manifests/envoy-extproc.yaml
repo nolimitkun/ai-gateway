@@ -16,6 +16,9 @@ spec:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
       name: kserve-mock
+      # Only the exact chat rule is compatible with the semantic router's
+      # OpenAI chat request contract. Other /v1 task APIs bypass ext_proc.
+      sectionName: chat
   extProc:
     - backendRefs:
         - name: semantic-router

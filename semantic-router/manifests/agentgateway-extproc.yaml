@@ -21,17 +21,23 @@ spec:
       name: kserve-mock
   traffic:
     extProc:
-      backendRef:
-        name: semantic-router
-        namespace: ai-demo
-        port: 50051
-      # A router that is down must not take the inference path with it.
-      failureMode: FailOpen
-      processingOptions:
-        allowModeOverride: true
-        requestHeaderMode: Send
-        requestBodyMode: Buffered
-        responseHeaderMode: Send
-        responseBodyMode: None
-        requestTrailerMode: Skip
-        responseTrailerMode: Skip
+      # The vLLM semantic router only implements OpenAI chat processing.
+      # Conditional ext_proc keeps embeddings, reranking, models, and audio on
+      # the same KServe route without sending them to the chat processor.
+      conditional:
+        - condition: 'request.path == "/v1/chat/completions"'
+          policy:
+            backendRef:
+              name: semantic-router
+              namespace: ai-demo
+              port: 50051
+            # A router that is down must not take the inference path with it.
+            failureMode: FailOpen
+            processingOptions:
+              allowModeOverride: true
+              requestHeaderMode: Send
+              requestBodyMode: Buffered
+              responseHeaderMode: Send
+              responseBodyMode: None
+              requestTrailerMode: Skip
+              responseTrailerMode: Skip
