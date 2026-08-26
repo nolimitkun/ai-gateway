@@ -448,7 +448,34 @@ def run(cluster: str, sample_count: int) -> dict:
                 or response_headers.get("x-vsr-selected-model")
                 or "No header"
             )
-        result["auto_models"] = " / ".join(selected)
+        # Envoy chooses an initial HTTPRoute rule before ext_proc runs. Prove
+        # that a forged internal model header cannot make model:auto skip the
+        # semantic processor on a model-specific chat section.
+        spoof_code, spoof_body, _ = json_call(
+            cfg,
+            "/v1/chat/completions",
+            access_token,
+            {
+                "model": "auto",
+                "messages": [{"role": "user", "content": AUTO_PROMPTS[0]}],
+            },
+            {"x-gateway-model-name": "qwen3.8-27b"},
+        )
+        spoof_selected = spoof_body.get("model")
+        spoof_upstream = spoof_body.get("mock_routing_headers", {}).get(
+            "x-selected-model"
+        )
+        auto_models = " / ".join(selected)
+        if not (
+            spoof_code == 200
+            and spoof_selected == selected[0]
+            and spoof_upstream == selected[0]
+        ):
+            auto_models += (
+                "; forged-header probe failed "
+                f"(HTTP {spoof_code}, model {spoof_selected}, upstream {spoof_upstream})"
+            )
+        result["auto_models"] = auto_models
         result["auto_upstream"] = f"{' / '.join(upstream)}; system prompt {system_prompts}/{len(AUTO_PROMPTS)}"
         result["auto_pools"] = " / ".join(auto_pools)
         result["auto_decision"] = " / ".join(decisions)

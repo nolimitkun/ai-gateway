@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "semantic-router" / "config" / "router-config.yaml"
 COMPARISON = ROOT / "compare" / "run-gateway.py"
 POOL_ROUTE = ROOT / "kserve" / "pools" / "route.yaml"
+KUADRANT_ROUTER = ROOT / "semantic-router" / "manifests" / "kuadrant-extproc.yaml"
 
 sys.path.insert(0, str(ROOT / "mock-llm"))
 from server import CATALOG  # noqa: E402
@@ -220,6 +221,55 @@ def main():
     route_text = POOL_ROUTE.read_text(encoding="utf-8").lower()
     if "x-model-class" in route_text:
         problems.append("pool route still exposes the obsolete x-model-class contract")
+
+    # Istio chooses a route before listener-level ext_proc filters run. A
+    # forged internal header can therefore select any model-specific chat
+    # section on the first pass. Semantic routing must be enabled on every one
+    # of those sections so model:auto is resolved before BBR overwrites the
+    # header and recomputes the route.
+    chat_route_names = {
+        rule["name"]
+        for rule in pool_route["spec"]["rules"]
+        if rule["name"] == "chat"
+        or (
+            rule["name"].startswith("model-")
+            and rule["matches"][0].get("path", {}).get("value")
+            == "/v1/chat/completions"
+        )
+    }
+    kuadrant_documents = list(
+        yaml.safe_load_all(KUADRANT_ROUTER.read_text(encoding="utf-8"))
+    )
+    kuadrant_filter = next(
+        document
+        for document in kuadrant_documents
+        if document.get("kind") == "EnvoyFilter"
+    )
+    semantic_route_names = set()
+    for patch in kuadrant_filter["spec"]["configPatches"]:
+        if patch.get("applyTo") != "HTTP_ROUTE":
+            continue
+        filter_config = (
+            patch.get("patch", {})
+            .get("value", {})
+            .get("typed_per_filter_config", {})
+            .get("ai.gateway.semantic_router", {})
+        )
+        if "overrides" not in filter_config or filter_config.get("disabled") is True:
+            continue
+        semantic_route_names.add(
+            patch.get("match", {})
+            .get("routeConfiguration", {})
+            .get("vhost", {})
+            .get("route", {})
+            .get("name")
+        )
+    missing_semantic_routes = sorted(chat_route_names - semantic_route_names)
+    if missing_semantic_routes:
+        problems.append(
+            "Kuadrant semantic routing is missing chat route sections: "
+            + ", ".join(missing_semantic_routes)
+        )
 
     for problem in problems:
         print(problem, file=sys.stderr)
