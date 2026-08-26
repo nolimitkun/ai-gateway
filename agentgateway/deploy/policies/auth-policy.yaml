@@ -55,11 +55,31 @@ spec:
         matchExpressions:
           - 'jwt.groups.exists(g, g == "model-users")'
 ---
-# The B300 model set is admin-only. BBR derives X-Gateway-Model-Name from the
-# request body before authorization; clients do not select accelerator classes.
+# The B300 model set is admin-only, plus any team entitled to it. BBR derives
+# X-Gateway-Model-Name from the request body before authorization; clients do
+# not select accelerator classes.
 # Written as a Require rule rather than a Deny
 # rule: a Deny whose expression errors fails open, and the membership test on
 # a missing header would error.
+#
+# The team arm is folded into this expression rather than added as a fourth
+# policy, and that is forced by the engine rather than a matter of taste:
+# `Require` rules are cumulative, so a separate policy could only ever
+# subtract access. Widening it to an entitled team means editing the rule that
+# already denies. Envoy Gateway has the mirror-image constraint -- rules are
+# first-match-wins there, so widening is a prepend and it is the *restriction*
+# that risks becoming unreachable.
+#
+# The hierarchy is read from the group path directly here, because
+# authorization is CEL over the verified claims and a subtree test is just
+# startsWith. Kuadrant can do the same through an Authorino CEL `predicate`;
+# Envoy Gateway is the one that cannot, matching claims by exact value with no
+# prefix and no regex, which is why the realm also emits flattened `org` and
+# `team` claims.
+#
+# The `== "/acme/research"` arm is needed because Keycloak emits the paths a
+# user is directly a member of, so a team member carries exactly
+# "/acme/research" and a prefix test alone would miss them.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
@@ -75,4 +95,4 @@ spec:
       action: Require
       policy:
         matchExpressions:
-          - '!("x-gateway-model-name" in request.headers) || !(request.headers["x-gateway-model-name"] in ["kimi-k3", "glm-5.3", "deepseek-v4-pro"]) || jwt.groups.exists(g, g == "platform-admins")'
+          - '!("x-gateway-model-name" in request.headers) || !(request.headers["x-gateway-model-name"] in ["kimi-k3", "glm-5.3", "deepseek-v4-pro"]) || jwt.groups.exists(g, g == "platform-admins") || (has(jwt.group_paths) && jwt.group_paths.exists(g, g == "/acme/research" || g.startsWith("/acme/research/")))'

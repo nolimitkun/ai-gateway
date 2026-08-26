@@ -3,6 +3,21 @@
 # budget is per proxy instance and the coarsest local window is an hour, so a
 # daily quota needs the global (external) rate limit service instead.
 #
+# Nested org/team/user buckets are not expressible here, and the reason is
+# sharper than "local buckets take no key" -- though that is also true: a
+# `local` entry carries only requests/tokens/unit/burst, with no key field at
+# all. The `conditional` wrapper does take CEL, so enumerating tenants as
+# conditions looks like a way out. It is not: only "the first matching policy
+# will be executed", and first-match-wins cannot charge an org bucket and a
+# team bucket for the same request. Note that the `authorization` rules in
+# auth-policy.yaml are cumulative -- this API mixes both semantics.
+#
+# `rateLimit.global` does nest, and is the best-specified of the three stacks
+# for it: descriptor entries are CEL, and so is the per-descriptor cost. But
+# `global.backendRef` is required, and this repository deploys a rate limit
+# service for Envoy Gateway only. So the gap is a deployment task rather than
+# a capability gap, and the comparison reports it as one.
+#
 # Token units require an agentgateway AI backend with tokenization enabled.
 # KServe's InferencePool integration is a generic Gateway API backend and does
 # not publish agentgateway's AI token metadata, so this path intentionally

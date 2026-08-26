@@ -166,6 +166,7 @@ test: ## test the multi-task mock runtime locally
 validate: ## check manifests and router config offline
 	$(PYTHON) scripts/validate-policies.py
 	$(PYTHON) scripts/validate-router-config.py
+	$(PYTHON) scripts/validate-tenant-model.py
 
 vllm-production: ## deploy pinned vLLM services (set VLLM_CONTEXT)
 	@test -n "$(VLLM_CONTEXT)" || { echo 'set VLLM_CONTEXT to a kubectl context' >&2; exit 2; }

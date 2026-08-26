@@ -162,6 +162,131 @@ def probe_limit(cfg: dict, access_token: str, header: tuple[str, str], count: in
     return f"no 429 in {count}"
 
 
+FORGEABLE_ORG_HEADER = {
+    "ai-gw-envoy": "x-org-id",
+    "ai-gw-kuadrant": "x-auth-org",
+    "ai-gw-agent": "x-org-id",
+}
+# Kept in step with the policy YAML by scripts/validate-tenant-model.py. The
+# classification below reads these caps rather than restating them, because a
+# cap edited in one place and not the other would not fail loudly -- it would
+# just relabel a healthy gateway as "unexpected".
+TENANT_ORG_CAP = 5
+TENANT_TEAM_CAP = 3
+TENANT_USERS = {"team_a": "carol", "team_b": "dave", "other_org": "erin"}
+
+
+def probe_tenants(cfg: dict, cluster: str) -> dict:
+    """Measure whether org/team limit buckets nest, share, or go unenforced.
+
+    Two members of two teams in one org, plus a member of a second org, run
+    against TENANT_ORG_CAP and TENANT_TEAM_CAP. Each outcome has a different
+    signature, so the row reports what happened rather than asserting that the
+    intended one did:
+
+      nested      team A stops at its own cap; team B stops *earlier* than its
+                  own cap, because it inherits an org bucket team A already
+                  spent down; the second org is untouched.
+      team-only   both teams stop at their own cap and neither constrains the
+                  other -- per-team buckets exist but the org ceiling above
+                  them does not bind.
+      shared      team B or the second org 429s on request 1, having inherited
+                  team A's spending: one bucket for every tenant.
+      unenforced  nothing 429s at all.
+
+    Team B is deliberately classified by *whether* it stops early rather than
+    by which request number it stops on. Envoy's limit service increments every
+    matching descriptor and returns the logical OR of their decisions, so team
+    A's rejected request still spends org budget; Limitador need not account
+    for a rejected request the same way. The exact index therefore differs by
+    one between correct implementations, and pinning it would report a healthy
+    gateway as "unexpected". The caps are spaced so that team B runs out of org
+    budget before its own cap under either accounting, which
+    scripts/validate-tenant-model.py enforces.
+    """
+    run = f"tenant-{int(time.time())}"
+    header = ("x-tenant-probe", run)
+    tokens = {role: token(cfg, name) for role, name in TENANT_USERS.items()}
+    if not all(tokens.values()):
+        return {"tenant_nesting": "Token error", "tenant_header_spoof": "Token error"}
+
+    # One past the team cap, which is where team A is expected to stop.
+    team_a = probe_limit(cfg, tokens["team_a"], header, TENANT_TEAM_CAP + 1)
+    team_b = probe_limit(cfg, tokens["team_b"], header, TENANT_TEAM_CAP + 1)
+
+    # The org bucket is spent now and the second org is still untouched, which
+    # is what makes this the moment to test the forgery: if the gateway lets a
+    # client-supplied org header through, carol lands in globex's empty bucket
+    # and the request succeeds. Overwritten from the verified claim, she stays
+    # in her own exhausted one.
+    forged = {header[0]: run, FORGEABLE_ORG_HEADER[cluster]: "globex"}
+    forged_code, _, _ = json_call(cfg, "/v1/chat/completions", tokens["team_a"], CHAT, forged)
+
+    other_org = probe_limit(cfg, tokens["other_org"], header, TENANT_TEAM_CAP)
+
+    def stopped_at(outcome: str) -> int | None:
+        match = re.match(r"429 on request (\d+)", outcome)
+        return int(match.group(1)) if match else None
+
+    at_a, at_b, at_other = (stopped_at(x) for x in (team_a, team_b, other_org))
+    own_cap = TENANT_TEAM_CAP + 1
+    if at_b == 1 or at_other == 1:
+        verdict = "shared"
+    elif at_a is None and at_b is None:
+        verdict = "unenforced"
+    elif at_a == own_cap and at_b is not None and 1 < at_b < own_cap and at_other is None:
+        verdict = "nested"
+    elif at_a == own_cap and at_b == own_cap and at_other is None:
+        verdict = "team-only"
+    else:
+        verdict = "unexpected"
+    return {
+        "tenant_nesting": f"{verdict}: team A {team_a}; team B {team_b}; other org {other_org}",
+        "tenant_header_spoof": (
+            f"Ignored (HTTP {forged_code})" if forged_code == 429
+            else f"HONOURED -- bucket escaped (HTTP {forged_code})" if forged_code == 200
+            else f"Inconclusive (HTTP {forged_code})"
+        ),
+    }
+
+
+def probe_shared_across_routes(cfg: dict, cluster: str) -> str:
+    """Check that a tenant bucket spans both inference routes, not one each.
+
+    Only Envoy Gateway has two of them (kserve-mock and the generated
+    kserve-mock-ai), and its BackendTrafficPolicy targets the Gateway, where
+    each route otherwise keeps its own counters. `shared: true` is what makes
+    the org and team buckets span both; without it a tenant quietly gets one
+    full budget per route. Nothing about the gateway looks wrong when that
+    happens, which is why it is worth a probe of its own rather than trusting
+    the field to stay set.
+
+    The team bucket is filled on the first route, then one request goes to the
+    second. A 429 means the two routes share the counter.
+    """
+    if cluster != "ai-gw-envoy":
+        return "Single inference route"
+    run = f"tenant-route-{int(time.time())}"
+    header = ("x-tenant-probe", run)
+    access_token = token(cfg, TENANT_USERS["team_a"])
+    if not access_token:
+        return "Token error"
+    filled = probe_limit(cfg, access_token, header, TENANT_TEAM_CAP)
+    if not filled.startswith("no 429"):
+        return f"Inconclusive: first route stopped early ({filled})"
+    # A small payload on the second route deliberately: the AI route matches
+    # any x-ai-eg-model, and a big-tier one would spend the token budget the
+    # token_limit row measures next.
+    code, _, _ = json_call(
+        cfg, "/v1/chat/completions", access_token, CHAT,
+        {header[0]: run, "x-ai-eg-model": "mock-kserve", "host": "ai.local"},
+    )
+    return {
+        429: "Shared across both routes",
+        200: "SEPARATE bucket per route -- ceiling doubled",
+    }.get(code, f"Inconclusive (HTTP {code})")
+
+
 def task_codes(cfg: dict, access_token: str) -> list[int]:
     codes = [json_call(cfg, "/v1/models", access_token)[0]]
     codes.append(json_call(cfg, "/v1/chat/completions", access_token, CHAT)[0])
@@ -524,6 +649,21 @@ def run(cluster: str, sample_count: int) -> dict:
         result["quota_limit"] = probe_limit(cfg, access_token, ("x-quota-probe", f"probe-{int(time.time())}"), 6)
         if cluster in ("ai-gw-kuadrant", "ai-gw-agent") and str(result["quota_limit"]).startswith("429"):
             result["quota_limit"] += "; shared bucket"
+        # Team entitlement: two members of the same org, one team entitled to
+        # the B300 class and one not. Both are ordinary model-users, so a 403
+        # for the unentitled team and a 200 for the entitled one is the whole
+        # hierarchy working -- the class is reached by team, not by admin.
+        carol_big, _, _ = json_call(cfg, "/v1/chat/completions", token(cfg, "carol"), BIG_CHAT)
+        dave_big, _, _ = json_call(cfg, "/v1/chat/completions", token(cfg, "dave"), BIG_CHAT)
+        result["team_entitlement"] = f"unentitled {dave_big} / entitled {carol_big}"
+        if cluster == "ai-gw-agent":
+            result.update({
+                "tenant_nesting": "Needs an external rate limit service",
+                "tenant_header_spoof": "Not applicable without tenant buckets",
+            })
+        else:
+            result.update(probe_tenants(cfg, cluster))
+        result["tenant_route_scope"] = probe_shared_across_routes(cfg, cluster)
         if cluster == "ai-gw-agent":
             result["token_limit"] = "Not available on KServe InferencePool"
         elif cluster == "ai-gw-envoy":
@@ -531,7 +671,7 @@ def run(cluster: str, sample_count: int) -> dict:
         else:
             result["token_limit"] = probe_limit(cfg, access_token, ("x-token-limit-probe", "true"), 6, BIG_CHAT)
     else:
-        for key in ("authentication", "task_authentication", "identity_headers", "authorization", "request_limit", "rate_scope", "quota_limit", "token_limit"):
+        for key in ("authentication", "task_authentication", "identity_headers", "authorization", "team_entitlement", "request_limit", "rate_scope", "quota_limit", "tenant_nesting", "tenant_header_spoof", "tenant_route_scope", "token_limit"):
             result[key] = "No policy" if not policies_present else "Token error"
 
     code, _, cors_headers = request(

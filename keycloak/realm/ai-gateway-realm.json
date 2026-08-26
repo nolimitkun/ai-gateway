@@ -7,12 +7,36 @@
   "groups": [
     { "name": "platform-admins" },
     { "name": "model-users" },
-    { "name": "guests" }
+    { "name": "guests" },
+    {
+      "name": "acme",
+      "attributes": { "tier": ["enterprise"] },
+      "subGroups": [
+        {
+          "name": "research",
+          "attributes": { "allowed-classes": ["b300,h200"] }
+        },
+        {
+          "name": "support",
+          "attributes": { "allowed-classes": ["l40s"] }
+        }
+      ]
+    },
+    {
+      "name": "globex",
+      "attributes": { "tier": ["free"] },
+      "subGroups": [
+        {
+          "name": "platform",
+          "attributes": { "allowed-classes": ["h100"] }
+        }
+      ]
+    }
   ],
   "clientScopes": [
     {
       "name": "ai-gateway-claims",
-      "description": "Claims the gateway policies authorize on: groups, plan, audience.",
+      "description": "Claims the gateway policies authorize on: groups, group_paths, org, team, plan, audience.",
       "protocol": "openid-connect",
       "attributes": {
         "include.in.token.scope": "true",
@@ -26,6 +50,44 @@
           "config": {
             "claim.name": "groups",
             "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "group-paths",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "group_paths",
+            "full.path": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "org",
+            "claim.name": "org",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "team",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "team",
+            "claim.name": "team",
+            "jsonType.label": "String",
             "access.token.claim": "true",
             "id.token.claim": "true",
             "userinfo.token.claim": "true"
@@ -121,6 +183,57 @@
       "groups": ["/guests"],
       "credentials": [
         { "type": "password", "value": "mallory", "temporary": false }
+      ]
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Carol",
+      "lastName": "Researcher",
+      "email": "carol@acme.example.com",
+      "attributes": {
+        "plan": ["gold"],
+        "org": ["acme"],
+        "team": ["research"]
+      },
+      "groups": ["/model-users", "/acme/research"],
+      "credentials": [
+        { "type": "password", "value": "carol", "temporary": false }
+      ]
+    },
+    {
+      "username": "dave",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dave",
+      "lastName": "Support",
+      "email": "dave@acme.example.com",
+      "attributes": {
+        "plan": ["gold"],
+        "org": ["acme"],
+        "team": ["support"]
+      },
+      "groups": ["/model-users", "/acme/support"],
+      "credentials": [
+        { "type": "password", "value": "dave", "temporary": false }
+      ]
+    },
+    {
+      "username": "erin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Erin",
+      "lastName": "Platform",
+      "email": "erin@globex.example.com",
+      "attributes": {
+        "plan": ["free"],
+        "org": ["globex"],
+        "team": ["platform"]
+      },
+      "groups": ["/model-users", "/globex/platform"],
+      "credentials": [
+        { "type": "password", "value": "erin", "temporary": false }
       ]
     }
   ]

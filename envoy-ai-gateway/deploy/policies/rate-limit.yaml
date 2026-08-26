@@ -1,10 +1,11 @@
 # Request rate limits, per-plan daily quotas, and the token budget, all as
 # Envoy Gateway global rate limit rules counted in Redis.
 #
-# Every bucket is keyed by the x-user-id header that the SecurityPolicy copies
-# out of the Keycloak token. The two probe rules are selected by an opt-in
-# header so a comparison run can exhaust them without spending the quota that
-# ordinary traffic shares.
+# Buckets are keyed by the identity headers the SecurityPolicy copies out of
+# the Keycloak token: x-user-id for the per-user rules, and x-org-id plus
+# x-team-id for the nested tenant rules further down. The probe rules are
+# selected by an opt-in header so a comparison run can exhaust them without
+# spending the quota that ordinary traffic shares.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
 metadata:
@@ -61,6 +62,46 @@ spec:
           limit:
             requests: 20000
             unit: Day
+        # Nested tenant buckets: org, then org+team. A request that carries
+        # both headers matches both rules and decrements both counters --
+        # "if a request matches multiple rules, each of their associated
+        # limits get applied", and the limit service returns the logical OR of
+        # their decisions. That intersection is what makes the levels nest:
+        # whichever bucket empties first returns the 429.
+        #
+        # `shared: true` is load-bearing, not decoration. This policy targets
+        # the Gateway, and each Route otherwise keeps its own counters. There
+        # are two inference routes (kserve-mock and the generated
+        # kserve-mock-ai), so without it an org would silently get one full
+        # budget per route -- twice the ceiling it was sold. The per-user rule
+        # below is left unshared: a user bucket splitting per route is
+        # survivable, and it keeps the contrast visible.
+        #
+        # The team limit is deliberately over-subscribed against the org
+        # limit: 2 teams x 3 does not fit in 5. The parent is the real cap,
+        # and the child only stops one team from eating it alone.
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-probe
+                  type: Distinct
+                - name: x-org-id
+                  type: Distinct
+          shared: true
+          limit:
+            requests: 5
+            unit: Hour
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-probe
+                  type: Distinct
+                - name: x-org-id
+                  type: Distinct
+                - name: x-team-id
+                  type: Distinct
+          shared: true
+          limit:
+            requests: 3
+            unit: Hour
         # Token budget. The request itself costs nothing; the response is
         # charged the total token count the AI Gateway extracted, so a big
         # model spends the budget four times faster than a small one.
