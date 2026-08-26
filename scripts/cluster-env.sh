@@ -14,7 +14,7 @@ select_cluster() {
   case "$CLUSTER" in
     ai-gw-kuadrant)
       STACK=kuadrant
-      KIND_CONFIG=clusters/kind-kuadrant.yaml
+      KIND_CONFIG=kuadrant/deploy/cluster/kind.yaml
       GATEWAY_NAMESPACE=openshift-ingress
       GATEWAY_NAME=openshift-ai-inference
       BASE_URL=http://localhost:8082
@@ -22,7 +22,7 @@ select_cluster() {
       ;;
     ai-gw-envoy)
       STACK=envoy
-      KIND_CONFIG=clusters/kind-envoy-ai-gateway.yaml
+      KIND_CONFIG=envoy-ai-gateway/deploy/cluster/kind.yaml
       GATEWAY_NAMESPACE=ai-demo
       GATEWAY_NAME=ai-gateway
       BASE_URL=http://localhost:8080
@@ -30,7 +30,7 @@ select_cluster() {
       ;;
     ai-gw-agent)
       STACK=agent
-      KIND_CONFIG=clusters/kind-agentgateway.yaml
+      KIND_CONFIG=agentgateway/deploy/cluster/kind.yaml
       GATEWAY_NAMESPACE=ai-demo
       GATEWAY_NAME=ai-gateway
       BASE_URL=http://localhost:8081

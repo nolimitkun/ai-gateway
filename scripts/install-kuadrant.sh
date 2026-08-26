@@ -34,7 +34,7 @@ test -f "$KUADRANT_CHART" || {
 helm --kube-context "$CTX" upgrade -i kuadrant-operator "$KUADRANT_CHART" --namespace kuadrant-system --create-namespace --wait --timeout 15m
 
 echo "==> [6/7] Kuadrant operands"
-kubectl --context "$CTX" apply -f "$ROOT/kuadrant/manifests/instance.yaml"
+kubectl --context "$CTX" apply -f "$ROOT/kuadrant/deploy/gateway/instance.yaml"
 kubectl --context "$CTX" -n kuadrant-system wait kuadrant/kuadrant --for=condition=Ready --timeout=12m
 
 echo "==> [7/7] controller readiness"

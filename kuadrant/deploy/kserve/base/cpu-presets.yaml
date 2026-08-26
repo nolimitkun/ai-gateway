@@ -1,0 +1,18 @@
+# KServe automatically resolves well-known presets for each deployment pattern.
+# Namespace-local configs take precedence over the global GPU/vLLM presets. The
+# comparison fixture provides its complete CPU workload and EPP specs inline, so
+# these intentionally empty overlays prevent unrelated CUDA and tokenizer
+# containers from being merged into the controlled mock workload.
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-template
+  namespace: ai-demo
+spec: {}
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceServiceConfig
+metadata:
+  name: kserve-config-llm-scheduler
+  namespace: ai-demo
+spec: {}

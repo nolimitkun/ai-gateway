@@ -1,0 +1,161 @@
+# Shared production runtime and scheduler. The image is deliberately pinned:
+# vLLM 0.27.0 contains the fix for GHSA-7m6h-x95x-82q5.
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceServiceConfig
+metadata:
+  name: vllm-production
+  namespace: ai-demo
+spec:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8000"
+    prometheus.io/scrape: "true"
+  template:
+    securityContext:
+      fsGroup: 0
+      fsGroupChangePolicy: OnRootMismatch
+    terminationGracePeriodSeconds: 60
+    containers:
+      - name: main
+        image: vllm/vllm-openai:v0.27.0
+        imagePullPolicy: IfNotPresent
+        command: [vllm, serve, /mnt/models]
+        ports:
+          - name: http
+            containerPort: 8000
+        env:
+          - name: HOME
+            value: /home/vllm
+          - name: HF_HOME
+            value: /home/vllm/.cache/huggingface
+          - name: VLLM_CACHE_ROOT
+            value: /home/vllm/.cache/vllm
+          - name: VLLM_MAX_AUDIO_CLIP_FILESIZE_MB
+            value: "25"
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          failureThreshold: 120
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 30
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 2000
+          runAsGroup: 0
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: vllm-home
+            mountPath: /home/vllm
+    volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 8Gi
+      - name: vllm-home
+        emptyDir: {}
+  router:
+    scheduler:
+      replicas: 1
+      pool:
+        spec:
+          targetPortNumber: 8000
+          selector:
+            app.kubernetes.io/name: '{{ .ObjectMeta.Name }}'
+            app.kubernetes.io/part-of: llminferenceservice
+            kserve.io/component: workload
+          extensionRef:
+            name: '{{ ChildName .ObjectMeta.Name `-epp-service` }}'
+            portNumber: 9002
+            failureMode: FailOpen
+      config:
+        inline:
+          apiVersion: llm-d.ai/v1alpha1
+          kind: EndpointPickerConfig
+          plugins:
+            - type: passthrough-parser
+            - type: active-request-scorer
+            - type: session-affinity-scorer
+          requestHandler:
+            parsers:
+              - pluginRef: passthrough-parser
+          schedulingProfiles:
+            - name: default
+              plugins:
+                - pluginRef: active-request-scorer
+                  weight: 1
+                - pluginRef: session-affinity-scorer
+                  weight: 1
+      template:
+        containers:
+          - name: main
+            image: ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0
+            imagePullPolicy: IfNotPresent
+            args:
+              - --pool-name
+              - '{{ ChildName .ObjectMeta.Name `-inference-pool` }}'
+              - --pool-namespace
+              - '{{ .ObjectMeta.Namespace }}'
+              - --pool-group
+              - inference.networking.k8s.io
+              - --zap-encoder
+              - json
+              - --grpc-port
+              - "9002"
+              - --grpc-health-port
+              - "9003"
+              - --cert-path
+              - /var/run/kserve/tls
+              - --metrics-endpoint-auth=false
+              - --tracing=false
+            ports:
+              - name: grpc
+                containerPort: 9002
+              - name: grpc-health
+                containerPort: 9003
+            livenessProbe:
+              grpc:
+                port: 9003
+                service: inference-extension
+              initialDelaySeconds: 5
+            readinessProbe:
+              grpc:
+                port: 9003
+                service: inference-extension
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: [ALL]
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                memory: 256Mi
+            volumeMounts:
+              - name: tls-certs
+                mountPath: /var/run/kserve/tls
+                readOnly: true
+        volumes:
+          - name: tls-certs
+            secret:
+              secretName: '{{ ChildName .ObjectMeta.Name `-kserve-self-signed-certs` }}'

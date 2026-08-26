@@ -7,14 +7,14 @@ select_cluster "${1:?usage: deploy-gateway.sh <cluster>}"
 
 case "$STACK" in
   kuadrant)
-    kubectl --context "$CONTEXT" apply -f "$ROOT/kuadrant/manifests/gateway.yaml"
-    kubectl --context "$CONTEXT" apply -f "$ROOT/kuadrant/manifests/policy.yaml"
+    kubectl --context "$CONTEXT" apply -f "$ROOT/kuadrant/deploy/gateway/gateway.yaml"
+    kubectl --context "$CONTEXT" apply -f "$ROOT/kuadrant/deploy/gateway/policy.yaml"
     ;;
   envoy)
-    kubectl --context "$CONTEXT" apply -f "$ROOT/envoy-ai-gateway/manifests/gateway.yaml"
+    kubectl --context "$CONTEXT" apply -f "$ROOT/envoy-ai-gateway/deploy/gateway/gateway.yaml"
     ;;
   agent)
-    kubectl --context "$CONTEXT" apply -f "$ROOT/agentgateway/manifests/gateway.yaml"
+    kubectl --context "$CONTEXT" apply -f "$ROOT/agentgateway/deploy/gateway/gateway.yaml"
     ;;
 esac
 

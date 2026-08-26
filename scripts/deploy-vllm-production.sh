@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/component-env.sh"
 
 usage() {
   echo "usage: $0 <kubectl-context> [--delete]" >&2
@@ -12,9 +13,19 @@ context=$1
 action=${2:-}
 [[ -z "$action" || "$action" == "--delete" ]] || usage
 
+# Known comparison contexts use their self-contained gateway tree. Preserve
+# the former shared path for arbitrary external GPU contexts.
+PRODUCTION_MANIFESTS="$ROOT/kserve/production"
+case "$context" in
+  kind-ai-gw-kuadrant|kind-ai-gw-envoy|kind-ai-gw-agent)
+    select_context_components "$context"
+    PRODUCTION_MANIFESTS="$COMPONENT_ROOT/kserve/production"
+    ;;
+esac
+
 kubectl --context "$context" cluster-info >/dev/null
 if [[ "$action" == "--delete" ]]; then
-  kubectl --context "$context" delete -k "$ROOT/kserve/production" --ignore-not-found
+  kubectl --context "$context" delete -k "$PRODUCTION_MANIFESTS" --ignore-not-found
   exit
 fi
 
@@ -25,9 +36,9 @@ if [[ "$gpu_nodes" -eq 0 ]]; then
   exit 1
 fi
 
-kubectl --context "$context" apply -f "$ROOT/kserve/production/vllm-config.yaml"
-kubectl --context "$context" apply -f "$ROOT/kserve/production/routes.yaml"
-kubectl --context "$context" apply -f "$ROOT/kserve/production/models.yaml"
+kubectl --context "$context" apply -f "$PRODUCTION_MANIFESTS/vllm-config.yaml"
+kubectl --context "$context" apply -f "$PRODUCTION_MANIFESTS/routes.yaml"
+kubectl --context "$context" apply -f "$PRODUCTION_MANIFESTS/models.yaml"
 kubectl --context "$context" -n ai-demo wait llminferenceservice \
   --for=condition=Ready --timeout=30m \
   vllm-chat vllm-embedding vllm-rerank vllm-transcription

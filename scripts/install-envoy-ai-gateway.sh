@@ -14,7 +14,7 @@ echo "==> [1/5] Gateway API Inference Extension CRDs $GAIE_VERSION"
 kubectl --context "$CTX" apply --server-side -f \
   "https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/${GAIE_VERSION}/v1-manifests.yaml"
 
-kubectl --context "$CTX" apply -f "$ROOT/kserve/manifests/envoy-inferencepool-rbac.yaml"
+kubectl --context "$CTX" apply -f "$ROOT/envoy-ai-gateway/deploy/kserve/base/envoy-inferencepool-rbac.yaml"
 
 echo "==> [2/5] Envoy Gateway $EG_VERSION"
 $H upgrade -i eg "$ROOT/envoy-ai-gateway/charts/gateway-helm-${EG_VERSION}.tgz" \

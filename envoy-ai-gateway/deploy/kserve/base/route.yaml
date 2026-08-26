@@ -1,0 +1,61 @@
+# Identical bring-your-own route referenced by the LLMInferenceService in all
+# clusters. KServe owns the InferencePool and EPP; this repository owns the
+# route so the gateway comparison uses exactly the same matching semantics.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kserve-mock
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  rules:
+    # Exact JSON-task rules let the official body-based router inspect only
+    # compatible payloads. The chat section may additionally chain semantic
+    # routing before BBR; model catalog and multipart audio use the fallback.
+    - name: chat
+      matches:
+        - path:
+            type: Exact
+            value: /v1/chat/completions
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-mock-inference-pool
+      timeouts:
+        request: 60s
+    - name: embeddings
+      matches:
+        - path:
+            type: Exact
+            value: /v1/embeddings
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-mock-inference-pool
+      timeouts:
+        request: 60s
+    - name: rerank
+      matches:
+        - path:
+            type: Exact
+            value: /v1/rerank
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-mock-inference-pool
+      timeouts:
+        request: 60s
+    - name: inference
+      matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-mock-inference-pool
+      timeouts:
+        request: 60s

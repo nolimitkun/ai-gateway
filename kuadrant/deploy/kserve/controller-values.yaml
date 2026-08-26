@@ -1,0 +1,14 @@
+kserve:
+  # Gateway API and GAIE CRDs are already pinned and installed by the two
+  # gateway stack installers. Avoid letting the KServe chart replace them.
+  createSharedResources: true
+  llmisvc:
+    createGIECRDs: false
+    controller:
+      imagePullPolicy: IfNotPresent
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 384Mi

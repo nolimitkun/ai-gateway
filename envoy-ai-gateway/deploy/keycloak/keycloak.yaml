@@ -1,0 +1,92 @@
+# Shared identity provider for the gateway feature comparison. One Keycloak per
+# cluster keeps the three stacks independent, exactly like the gateways
+# themselves.
+#
+# KC_HOSTNAME pins the issuer to the in-cluster Service URL. Tokens are minted
+# through the gateway on localhost, but every gateway resolves the issuer and
+# its JWKS in-cluster, so the issuer string must not depend on the caller's
+# host header.
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: ai-demo
+  labels:
+    app: keycloak
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: ai-demo
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  # Each local cluster is deliberately small. Realm refreshes may briefly
+  # interrupt token issuance, so replace the single memory-heavy pod instead
+  # of running two Keycloak instances during a rolling update.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.4.0
+          args: ["start-dev", "--import-realm"]
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: admin
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              value: admin
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HOSTNAME
+              value: http://keycloak.ai-demo.svc.cluster.local:8080
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+              value: "false"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1500Mi
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: keycloak-realm
