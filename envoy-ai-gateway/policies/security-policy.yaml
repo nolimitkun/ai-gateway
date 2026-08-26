@@ -41,7 +41,7 @@ spec:
   authorization:
     defaultAction: Deny
     rules:
-      - name: admins-reach-every-model-class
+      - name: admins-reach-every-model
         action: Allow
         principal:
           jwt:
@@ -51,13 +51,15 @@ spec:
                 valueType: StringArray
                 values:
                   - platform-admins
-      - name: big-tier-is-admin-only
+      - name: big-tier-models-are-admin-only
         action: Deny
         principal:
           headers:
-            - name: x-model-class
+            - name: x-gateway-model-name
               values:
-                - b300
+                - kimi-k3
+                - glm-5.3
+                - deepseek-v4-pro
       - name: model-users
         action: Allow
         principal:
@@ -78,4 +80,3 @@ spec:
     allowHeaders:
       - authorization
       - content-type
-      - x-model-class

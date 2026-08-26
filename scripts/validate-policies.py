@@ -44,6 +44,7 @@ MANIFESTS = (
     "kserve/manifests/*.yaml",
     "kserve/pools/*.yaml",
     "kserve/production/*.yaml",
+    "llm-d/manifests/*.yaml",
     "semantic-router/manifests/*.yaml",
 )
 

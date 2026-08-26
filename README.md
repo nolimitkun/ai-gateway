@@ -4,7 +4,8 @@ This repository runs the same KServe inference path through three Gateway API
 stacks:
 
 ```text
-Gateway -> HTTPRoute -> InferencePool -> llm-d endpoint picker -> model pod
+OpenAI body.model -> gateway BBR ext_proc -> HTTPRoute -> InferencePool
+                  -> llm-d endpoint picker -> model pod
 ```
 
 The default deployment is a deterministic CPU fixture for comparing routing,
@@ -13,8 +14,16 @@ adds Keycloak authentication, authorization, rate limits, and quotas, then
 compares which paths can enforce token budgets and CORS. A separate production
 package deploys real, task-specific vLLM services on NVIDIA GPUs.
 
-Shared components are pinned once per cluster: KServe 0.20.0 and Keycloak
-26.4.0. All Helm charts and CRD schemas are vendored in the repository.
+Shared components are pinned once per cluster: KServe 0.20.0, Gateway API
+Inference Extension BBR 1.2.1, and Keycloak 26.4.0. All Helm charts and CRD
+schemas are vendored in the repository.
+
+Clients send only the ordinary OpenAI JSON field, for example
+`{"model":"kimi-k3",...}`. The official Body-Based Router (BBR) copies that
+value into the internal `X-Gateway-Model-Name` header and clears the proxy's
+route cache. A header-specific `HTTPRoute` rule then selects the model's KServe
+pool, and that pool's llm-d endpoint picker selects a replica. BBR overwrites a
+client-forged internal header; clients never choose an accelerator header.
 
 ## Gateway comparison
 
@@ -62,15 +71,16 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-25 13:11 (50 requests) | 2026-08-25 13:18 (50 requests) | 2026-08-25 13:05 (50 requests) |
+| Last isolated comparison (UTC) | 2026-08-26 07:33 (30 requests) | 2026-08-26 07:36 (30 requests) | 2026-08-26 07:10 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
-| Route rules | chat Exact + /v1 prefix | chat Exact + /v1 prefix | chat Exact + /v1 prefix |
+| Route rules | body.model + 12 pool rules | body.model + 12 pool rules | body.model + 12 pool rules |
+| OpenAI `body.model` to accelerator pool | 4/4 pools; client header overwritten | 4/4 pools; client header overwritten | 4/4 pools; client header overwritten |
 | Endpoint-picker transport | TLS policy ready | Plaintext in local fixture | Plaintext in local fixture |
 | Workload replicas | 2/2 | 2/2 | 2/2 |
 | KServe-owned Deployments, Services, and Pool | 5 | 5 | 5 |
-| Latest routing sample | 50/50 HTTP 200, 2 pods | 50/50 HTTP 200, 2 pods | 50/50 HTTP 200, 2 pods |
+| Latest routing sample | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods |
 | Streaming usage chunk | Yes | Yes | Yes |
 | Streaming `[DONE]` termination | Yes | Yes | Yes |
 | Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
@@ -83,14 +93,15 @@ zero-delay Python runtime, not production performance benchmarks.
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
 | Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
 | Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
-| Local chat p50 | 40 ms | 41 ms | 54 ms |
+| Local chat p50 | 50 ms | 38 ms | 59 ms |
 | Policy objects reporting ready | 3/3 | 3/3 | 5/5 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
 | Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
 | Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
+| Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | all / all / all |
 | Decision headers returned to the client | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk |
-| Auto-routed chat p50 | 41 ms | 40 ms | 30 ms |
+| Auto-routed chat p50 | 48 ms | 27 ms | 61 ms |
 | Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
@@ -99,7 +110,7 @@ zero-delay Python runtime, not production performance benchmarks.
 | Authorization: guest / non-admin B300 / admin B300 | 403 / 403 / 200 | 403 / 403 / 200 | 403 / 403 / 200 |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
 | Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
-| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
+| Quota limit (3 per window) | 429 on request 1 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 1 of 6; shared bucket |
 | Token limit (100 tokens per minute) | 429 on request 3 of 6 | 429 on request 3 of 6 | Not available on KServe InferencePool |
 | CORS preflight answered | No (HTTP 405) | Yes (HTTP 200) | Yes (HTTP 200) |
 | Unapproved CORS origin | No allow-origin (HTTP 405) | No allow-origin (HTTP 200) | No allow-origin (HTTP 200) |
@@ -138,7 +149,8 @@ Evidence labels are deliberately strict:
 
 | Capability | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway | Evidence boundary |
 |---|---|---|---|---|
-| KServe route, EPP, two model pods | Live | Live | Live | Programmed/Accepted conditions, ownership, and 50/50 successful routing sample |
+| KServe route, EPP, two model pods | Live | Live | Live | Programmed/Accepted conditions, ownership, and 30/30 successful routing sample |
+| OpenAI `body.model` to accelerator pool | Live | Live | Live | B300, H200, H100, and L40S plus a forged internal-header overwrite are probed |
 | Models, chat/SSE, embeddings, rerank, STT | Live | Live | Live | Valid and invalid contracts, `[DONE]`, dimensions, and unsupported diarization |
 | JWT and authorization | Live | Live | Live | Anonymous, forged, guest, member, and admin requests; all five APIs require a valid token |
 | Identity export to the model | Live | Live | Not configured | Allowlisted non-secret evidence headers are echoed by the mock runtime |
@@ -146,7 +158,8 @@ Evidence labels are deliberately strict:
 | Token budget on KServe path | Live | Live | Path-limited | agentgateway token units need an AI backend/tokenizer, not a generic `InferencePool` |
 | CORS allow and reject | Not provided | Live | Live | Approved and unapproved origins are both probed |
 | Chat-only external processing | Live, raw `EnvoyFilter` | Live | Live | Selection, response headers, non-chat bypass, fail-open, and restoration are tested |
-| Endpoint-picker transport | Live TLS | Live plaintext fixture | Live plaintext fixture | Kuadrant additionally asserts `BackendTLSPolicy` readiness |
+| Endpoint-picker transport | Live TLS | Live plaintext fixture | Live plaintext fixture | Kuadrant additionally asserts `BackendTLSPolicy` readiness; this row describes EPP, not BBR |
+| BBR transport | Live self-signed TLS | Live self-signed TLS | Live self-signed TLS | Istio `DestinationRule`, Envoy `Backend`, and `AgentgatewayBackend` originate HTTP/2 TLS |
 | API-key authentication | Schema | Schema | Schema | Requires separate secrets and an authentication-composition test matrix |
 | Browser OIDC | Schema | Schema | Path-limited to MCP OAuth | Requires redirects, callback URLs, browser state, and a separate listener/client fixture |
 | Client mTLS | Schema | Schema | Schema | Requires an HTTPS listener plus client and trust-chain certificates |
@@ -264,6 +277,7 @@ cluster is a single Kubernetes 1.36.1 node.
 |---|---|---|
 | Kubernetes | One independent Kind cluster per gateway | 1.36.1 (`kindest/node` digest pinned) |
 | Gateway API Inference Extension | Required before gateway and KServe controllers | 1.5.0 |
+| Body-Based Router | JSON `body.model` to the internal Gateway API model header | 1.2.1 |
 | KServe LLMInferenceService | Shared inference controller in each cluster | 0.20.0 |
 | cert-manager | KServe webhooks; also endpoint-picker TLS in the OpenShift profile | 1.17.0 |
 | Identity | Keycloak realm imported independently in each cluster | 26.4.0 |
@@ -274,17 +288,25 @@ cluster is a single Kubernetes 1.36.1 node.
 
 Install order is enforced independently for each cluster: Kind node and CRDs →
 selected gateway controller → KServe controller → mock runtime ConfigMap →
-Gateway → `LLMInferenceService` and route → optional Keycloak policies →
+Gateway → `LLMInferenceService`, BBR, and route → optional Keycloak policies →
 optional semantic router. The Envoy policy installer also corrects the
 vendored Envoy Gateway 1.8.1 `BackendTrafficPolicy` int32 schema maximum before
 applying limits.
 
+BBR 1.2.1 always generates an ephemeral self-signed serving certificate. The
+local fixture therefore enables upstream TLS but skips certificate verification:
+Istio uses `DestinationRule`, Envoy Gateway uses a typed `Backend`, and
+agentgateway uses `AgentgatewayBackend`. This is suitable for an isolated Kind
+comparison only. A production deployment should use a BBR build/configuration
+with an operator-controlled certificate and verify its CA/SAN instead.
+
 ## Architecture
 
 Each schema below is one complete Kind cluster. All three contain the same
-KServe desired state—one `LLMInferenceService`, its scheduler/EPP,
-`InferencePool`, two CPU model pods, Keycloak, and the optional semantic
-router—but no component is shared across clusters.
+KServe desired state—one base `LLMInferenceService`, its scheduler/EPP,
+`InferencePool`, two CPU model pods, BBR, Keycloak, and the optional semantic
+router. `make pools` adds four accelerator-class LLMIs in that same cluster;
+no component is shared across clusters.
 
 ### OpenShift profile: Kuadrant + Istio/Envoy
 
@@ -295,7 +317,8 @@ flowchart TB
   subgraph K["ai-gw-kuadrant · Kubernetes 1.36.1"]
     subgraph OI["openshift-ingress"]
       GW["Gateway/openshift-ai-inference<br/>Istio-managed Envoy proxy"]
-      EF["EnvoyFilter/semantic-router<br/>chat rule only"] -. programs .-> GW
+      EF["EnvoyFilter/semantic-router<br/>all chat sections"] -. programs .-> GW
+      BF["EnvoyFilter/model-body-router<br/>JSON task rules"] -. programs .-> GW
     end
     subgraph KSYS["istio-system + kuadrant-system"]
       ISTIOD["istiod 1.29.2"] --> GW
@@ -305,11 +328,13 @@ flowchart TB
     end
     subgraph APP["ai-demo"]
       KR["HTTPRoute/keycloak<br/>/realms"] --> KC["Keycloak 26.4.0"]
-      R["HTTPRoute/kserve-mock<br/>chat Exact + /v1 prefix"] --> P["InferencePool"]
+      R["HTTPRoute/kserve-mock<br/>body.model + 12 pool rules"] --> P["InferencePool"]
       AP["AuthPolicy"] -.-> WASM
       RP["RateLimitPolicy"] -.-> WASM
       TP["TokenRateLimitPolicy"] -.-> WASM
       SR["semantic-router 0.3.0<br/>gRPC ext_proc :50051"] <-->|"chat body/header rewrite"| EF
+      BBR["BBR 1.2.1<br/>body.model → internal header"] <-->|"TLS ext_proc :9004"| BF
+      BDR["DestinationRule<br/>TLS, self-signed fixture"] -.-> BBR
       TLS["Certificate + BackendTLSPolicy"] -.-> P
       P --> EPP["llm-d EPP/scheduler"] --> PODS["2 mock model pods"]
       LLM["LLMInferenceService/kserve-mock"]
@@ -334,9 +359,10 @@ flowchart TB
 | Gateway API versions | Gateway API 1.4.1; Inference Extension 1.5.0 |
 | Security | Keycloak JWT, group/B300 authorization through `AuthPolicy` and Authorino |
 | Limits | Limitador-backed request, quota, and response `usage.total_tokens` accounting; fixture probe buckets are shared |
-| Semantic routing | Raw Istio `EnvoyFilter`; disabled by default and enabled only on the named `chat` route rule |
-| KServe connection | `HTTPRoute` → `InferencePool` → TLS-protected EPP → two model pods |
-| Deep live evidence | 50-request routing sample; five APIs; JWT/authz/identity; shared rate/quota; token budget; ext_proc scope/fail-open; EPP TLS |
+| Model-to-pool routing | Raw Istio `EnvoyFilter` runs BBR only on named JSON task/model rules; a TLS `DestinationRule` handles BBR's runtime self-signed certificate |
+| Semantic routing | A preceding raw `EnvoyFilter` covers the base chat rule and all five model-specific chat rules; BBR then recomputes the route, so `auto` reaches B300/H200/H100 even when a client forges the internal model header |
+| KServe connection | body-derived route rule → `InferencePool` → TLS-protected EPP → model pods |
+| Deep live evidence | 30-request routing sample; four body-routed pools; five APIs; JWT/authz/identity; shared rate/quota; token budget; ext_proc scope/fail-open; EPP TLS |
 | Not provided in this profile | Native Kuadrant CORS or ext_proc policy; CORS probe returns HTTP 405 |
 
 This profile's Kustomize overlays change the route parent to
@@ -363,13 +389,15 @@ flowchart TB
     end
     subgraph APP["ai-demo"]
       KR["HTTPRoute/keycloak<br/>/realms"] --> KC["Keycloak 26.4.0"]
-      R["HTTPRoute/kserve-mock<br/>chat Exact + /v1 prefix"] --> P["InferencePool"]
+      R["HTTPRoute/kserve-mock<br/>body.model + 12 pool rules"] --> P["InferencePool"]
       AIR["AIGatewayRoute/kserve-mock-ai<br/>Host ai.local"]
       AIR --> P
       SP["SecurityPolicy<br/>JWT + authz + CORS"] -.-> GW
       BP["BackendTrafficPolicy<br/>request/quota/token cost"] -.-> GW
-      EP["EnvoyExtensionPolicy<br/>sectionName: chat"] -.-> GW
+      EP["EnvoyExtensionPolicy<br/>semantic-router → BBR chain"] -.-> GW
       SR["semantic-router 0.3.0<br/>gRPC ext_proc :50051"] <-->|"chat rewrite"| EP
+      BBR["BBR 1.2.1<br/>body.model → internal header"] <-->|"TLS ext_proc :9004"| EP
+      EB["Envoy Backend<br/>HTTP/2 TLS"] -.-> BBR
       P --> EPP["llm-d EPP/scheduler"] --> PODS["2 mock model pods"]
       LLM["LLMInferenceService/kserve-mock"]
     end
@@ -394,9 +422,10 @@ flowchart TB
 | Security | `SecurityPolicy` verifies Keycloak JWT, exports user/plan headers, applies group authorization and CORS |
 | Limits | `BackendTrafficPolicy` global limits; Envoy rate-limit service stores keyed counters in Redis |
 | Token path | `Host: ai.local` uses `AIGatewayRoute`; AI ext_proc publishes `llm_total_token` consumed as response cost |
-| Semantic routing | `EnvoyExtensionPolicy` targets only `HTTPRoute` rule `chat`; non-chat `/v1` APIs bypass it |
-| KServe connection | Both ordinary and AI-generated HTTP routes end at the same KServe `InferencePool` and EPP |
-| Deep live evidence | 50-request routing sample; five APIs; JWT/authz/identity; per-user rate/quota; token budget; CORS allow/reject; ext_proc scope/fail-open |
+| Model-to-pool routing | `EnvoyExtensionPolicy` calls BBR through a typed HTTP/2 TLS `Backend`; base and model sections are both covered against header spoofing |
+| Semantic routing | One ordered policy runs semantic-router then BBR, so explicit and `auto` models reach their accelerator pools; non-chat tasks bypass semantic routing |
+| KServe connection | Body-derived and AI-generated HTTP routes end at KServe `InferencePool` resources and their EPPs |
+| Deep live evidence | 30-request routing sample; four body-routed pools; five APIs; JWT/authz/identity; per-user rate/quota; token budget; CORS allow/reject; ext_proc scope/fail-open |
 | Installer compatibility fix | Clamps the invalid uint32 maximum in the 1.8.1 int32 `BackendTrafficPolicy` CRD |
 
 ### agentgateway
@@ -413,13 +442,16 @@ flowchart TB
       GW["Gateway/ai-gateway<br/>Rust proxy"]
       UI["agentgateway UI :15000<br/>make agent-ui"] --- GW
       KR["HTTPRoute/keycloak<br/>/realms"] --> KC["Keycloak 26.4.0"]
-      R["HTTPRoute/kserve-mock<br/>chat Exact + /v1 prefix"] --> P["InferencePool"]
+      R["HTTPRoute/kserve-mock<br/>body.model + 12 pool rules"] --> P["InferencePool"]
       JWT["AgentgatewayPolicy<br/>JWT authentication"] -.-> GW
       AZ["AgentgatewayPolicy<br/>member + B300 authorization"] -.-> GW
       RL["AgentgatewayPolicy<br/>local request/quota counters"] -.-> GW
       CORS["AgentgatewayPolicy<br/>CORS"] -.-> GW
-      EP["AgentgatewayPolicy extProc<br/>CEL path == chat"] -.-> GW
+      EP["AgentgatewayPolicy extProc<br/>semantic chat processor"] -.-> GW
       SR["semantic-router 0.3.0<br/>gRPC ext_proc :50051"] <-->|"chat rewrite"| EP
+      BP["AgentgatewayPolicy PreRouting<br/>JSON task BBR"] -.-> GW
+      BBR["BBR 1.2.1<br/>body.model → internal header"] <-->|"TLS ext_proc :9004"| BP
+      AGB["AgentgatewayBackend<br/>HTTP/2 TLS"] -.-> BBR
       P --> EPP["llm-d EPP/scheduler"] --> PODS["2 mock model pods"]
       LLM["LLMInferenceService/kserve-mock"]
     end
@@ -444,9 +476,10 @@ flowchart TB
 | Security | Separate `AgentgatewayPolicy` resources for Keycloak JWT, group membership, B300 authorization, and CORS |
 | Limits | In-process local request/minute and quota/hour counters, shared per proxy; global mode is required for durable keyed windows |
 | Token boundary | Generic KServe `InferencePool` does not publish agentgateway AI-backend tokenization metadata, so token units are reported unavailable |
-| Semantic routing | Conditional `traffic.extProc` runs only when `request.path == "/v1/chat/completions"` |
-| KServe connection | `HTTPRoute` → KServe `InferencePool` → EPP → two model pods |
-| Deep live evidence | 50-request routing sample; five APIs; JWT/authz; shared local rate/quota; CORS allow/reject; ext_proc scope/fail-open |
+| Model-to-pool routing | Gateway-scoped PreRouting BBR uses a native `AgentgatewayBackend` with HTTP/2 TLS and handles chat, embedding, and rerank JSON bodies |
+| Semantic routing | Route-scoped semantic ext_proc runs after PreRouting BBR in v1.4.1: selection works, but `auto` stays on shared pool `all`; explicit models reach accelerator pools |
+| KServe connection | Body-derived route rule → KServe `InferencePool` → EPP → model pods |
+| Deep live evidence | 30-request routing sample; four explicit body-routed pools; five APIs; JWT/authz; shared local rate/quota; CORS allow/reject; ext_proc scope/fail-open |
 | Additional native surface | AI backends, prompt guards, model aliases/caching, MCP routing/OAuth, tracing, metrics, and access logs |
 
 ## Runtime profiles
@@ -530,9 +563,9 @@ smaller `dimensions` value; other embedding fixtures reject it.
 #### Accelerator routing fixture
 
 `make pools CLUSTER=<name>` adds one mock serving pool per intended accelerator
-class. These resources validate placement, header routing, pool ownership, and
-wrong-pool errors on kind; they do not turn the Python container into a GPU
-model server.
+class. These resources validate placement, body-derived routing, pool
+ownership, and wrong-pool errors on kind; they do not turn the Python container
+into a GPU model server.
 
 | Pool | Intended accelerator | Models |
 |---|---|---|
@@ -542,30 +575,39 @@ model server.
 | `kserve-l40s` | NVIDIA L40S | Light embeddings, both rerankers, `whisper-large-v3`, `voxtral-mini-3b` |
 | `kserve-mock` | CPU | The four `mock-*` task fixtures |
 
-Select a pool with `x-model-class`. Requests without it use the shared route:
+The client selects a model exactly as it would with any OpenAI-compatible API.
+There is no routing header:
 
 ```bash
 curl "$BASE/v1/chat/completions" \
   -H 'content-type: application/json' \
-  -H 'x-model-class: b300' \
   -d '{"model":"kimi-k3","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-`mock_accelerator` reports the runtime that actually answered; the shared
-fixture reports `all`. `model_accelerator` reports the model's intended class.
-A model sent to the wrong pool returns HTTP 404 `model_not_served_here`.
+BBR derives the internal routing header from `body.model`; named HTTPRoute
+rules map it to `kserve-b300`, `kserve-h200`, `kserve-h100`, or `kserve-l40s`.
+The deployment probe also sends a contradictory internal header and verifies
+that BBR's body value wins. `mock_accelerator` reports the runtime that actually
+answered; the shared fixture reports `all`. `model_accelerator` reports the
+model's intended class. A model sent to the wrong pool returns HTTP 404
+`model_not_served_here`.
+
+BBR 1.2.1 parses JSON. Chat, embedding, and rerank requests therefore use
+body-based pool routing. OpenAI speech-to-text is multipart, so its `model`
+form field cannot be extracted by this BBR release and remains on the shared
+fixture route. This is a tested limitation, not an implied STT pool claim.
 
 ### Production vLLM
 
 `kserve/production/` replaces the combined fixture with one independently
 scalable vLLM `LLMInferenceService` per model and task:
 
-| Route header | Hugging Face model | Served name | API | Reference GPU |
+| Public endpoint | Hugging Face model | Served name | API | Reference GPU |
 |---|---|---|---|---|
-| `x-model-service: chat` | `Qwen/Qwen3-8B` | `qwen3-8b` | Chat and models | H100 |
-| `x-model-service: embedding` | `Qwen/Qwen3-Embedding-8B` | `qwen3-embedding-8b` | Embeddings | H100 |
-| `x-model-service: rerank` | `BAAI/bge-reranker-v2-m3` | `bge-reranker-v2-m3` | Rerank | L40S |
-| `x-model-service: transcription` | `openai/whisper-large-v3-turbo` | `whisper-large-v3-turbo` | Transcription | L40S |
+| `/v1/chat/completions`, `/v1/models` | `Qwen/Qwen3-8B` | `qwen3-8b` | Chat and models | H100 |
+| `/v1/embeddings` | `Qwen/Qwen3-Embedding-8B` | `qwen3-embedding-8b` | Embeddings | H100 |
+| `/rerank`, `/v1/rerank`, `/v2/rerank` | `BAAI/bge-reranker-v2-m3` | `bge-reranker-v2-m3` | Rerank | L40S |
+| `/v1/audio/transcriptions` | `openai/whisper-large-v3-turbo` | `whisper-large-v3-turbo` | Transcription | L40S |
 
 The shared runtime config uses the official pinned
 [`vllm/vllm-openai:v0.27.0` image](https://docs.vllm.ai/en/v0.27.0/deployment/docker/),
@@ -661,7 +703,7 @@ only propagation check that also covers Kuadrant's status-less `EnvoyFilter`.
 A gateway that never starts routing records the negative in its own result.
 
 This layer's manifests and decisions pass the offline checks below and the
-2026-08-25 isolated retest selected the expected reasoning, code, and chat
+2026-08-26 isolated retest selected the expected reasoning, code, and chat
 model through all three gateways. Run `make semantic-router-all && make
 compare-all`, or dispatch the comparison workflow, to refresh every routing
 detail and latency row together without running the clusters concurrently.
@@ -702,6 +744,17 @@ curl "$BASE/v1/chat/completions" -H 'content-type: application/json' \
 | OpenShift profile | Istio `EnvoyFilter` inserting `envoy.filters.http.ext_proc` into the gateway listener | None; `EnvoyFilter` has no status |
 | Envoy AI Gateway | `EnvoyExtensionPolicy` `extProc` targeting the `HTTPRoute` | `Accepted` |
 | agentgateway | `AgentgatewayPolicy` `traffic.extProc` targeting the `HTTPRoute` | `Accepted` |
+
+Pool routing adds a second external processor. On Kuadrant and Envoy it runs
+after semantic selection, so `model:auto` is converted to the selected model
+and then reaches that model's pool. Because Envoy chooses an initial route
+before either processor runs, both attachments enable semantic processing on
+the base chat section and every model-specific chat section. The comparison
+also sends `model:auto` with a contradictory internal header and requires the
+semantic decision to win. agentgateway 1.4.1 runs gateway-scoped BBR in
+`PreRouting` before the route-scoped semantic processor; explicit models still
+route correctly, while `auto` remains on the shared pool. The live table
+records this as `b300/h200/h100` versus `all/all/all`.
 
 The OpenShift profile is the outlier: Kuadrant has no external-processing
 policy and Istio's Gateway API support does not cover ext_proc either, so the
@@ -798,8 +851,9 @@ check rather than quietly reporting the default as a routing decision.
 `make compare CLUSTER=<name>` adds live-cluster assertions to that gateway's
 saved result:
 
-- Gateway Programmed, both named route rules, Accepted/ResolvedRefs conditions,
-  KServe readiness/ownership, endpoint-picker transport, and both model pods;
+- Gateway Programmed, the expanded body-model route rules,
+  Accepted/ResolvedRefs conditions, KServe readiness/ownership,
+  endpoint-picker transport, and both model pods;
 - model catalog, tier-correct routing, streaming usage and `[DONE]`, embeddings
   including reduced/fixed dimensions, reranking, transcription, and
   diarization capability rejection;
@@ -811,8 +865,9 @@ saved result:
   isolation, quota, token budget, and approved/unapproved CORS origins;
 - ext_proc attachment, the model chosen for each of three prompts, the model and
   system prompt the runtime received, the decision headers returned to the
-  client, non-chat bypass, controlled router failure/restoration, and
-  auto-routed p50 latency when the optional semantic routing layer is installed.
+  client, non-chat bypass, a forged-header `model:auto` request, controlled
+  router failure/restoration, and auto-routed p50 latency when the optional
+  semantic routing layer is installed.
 
 Each run creates a separate ignored JSON result. `make comparison-summary`
 merges all three into the marked README table. Offline schema validation cannot
@@ -842,6 +897,7 @@ turn.
 |---|---|---|
 | Repository | `GatewayClass`, `Gateway`, `HTTPRoute` | Select the gateway and connect `/v1` to KServe |
 | Repository | `LLMInferenceService` and `LLMInferenceServiceConfig` | Declare model workload, replicas, runtime, router, and scheduler |
+| Repository | BBR Deployment/Service and gateway-native ext_proc TLS attachment | Convert OpenAI JSON `body.model` into trusted pool routing |
 | Repository | Keycloak workload, realm, Service, and route | Issue the tokens used by all policy tests |
 | Repository | Stack-native policy resources | Configure and compare auth, authorization, limits, quota, token accounting, and CORS |
 | OpenShift profile overlay | Shared Gateway refs, cert-manager certificates, `BackendTLSPolicy` | Reproduce the OpenShift namespace and trusted EPP connection |
@@ -858,10 +914,11 @@ The KServe directory is organized as follows:
 | Path | Purpose |
 |---|---|
 | `kserve/manifests/llmisvc.yaml` | Two CPU mock replicas and the complete llm-d scheduler |
-| `kserve/manifests/route.yaml` | Shared `/v1` inference route |
+| `kserve/manifests/route.yaml` | Base shared JSON-task and `/v1` fallback route |
 | `kserve/manifests/cpu-presets.yaml` | Prevents KServe GPU/vLLM presets from merging into the laptop fixture |
 | `kserve/manifests/envoy-inferencepool-rbac.yaml` | Allows Envoy Gateway to watch `InferencePool`; other stacks install equivalent RBAC |
-| `kserve/pools/` | One mock `LLMInferenceService`, route, endpoint picker, and pool per accelerator class |
+| `kserve/pools/` | Four mock `LLMInferenceService` pools plus the shared 12-model body-derived route |
+| `llm-d/manifests/` | Official BBR workload and the three gateway-specific ext_proc/TLS attachments |
 | `kserve/overlays/gpu/` | Placement and device requests for the mock pools; not a production runtime |
 | `kserve/production/` | Pinned vLLM runtime and four real task-specific services |
 | `kuadrant/kserve-overlay/` | Shared OpenShift-style Gateway references and trusted endpoint-picker certificate |
@@ -898,6 +955,7 @@ envoy-ai-gateway/          Envoy AI Gateway resources, policies, values, and cha
 agentgateway/              agentgateway resources, policies, values, and charts
 keycloak/                  shared realm, workload, and token route
 kserve/                    controller charts, fixture resources, pools, and production vLLM
+llm-d/                     body-based router and gateway-specific attachments
 mock-llm/                  deterministic multi-task CPU runtime and tests
 semantic-router/           vLLM Semantic Router workload, decisions, and ext_proc attachments
 scripts/                   installation, deployment, validation, and lifecycle commands

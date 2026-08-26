@@ -1,4 +1,4 @@
-# Envoy AI Gateway: attach the semantic router with an EnvoyExtensionPolicy.
+# Envoy AI Gateway: chain semantic model choice before body-based pool routing.
 #
 # Envoy Gateway has a first-class Gateway API policy for external processing,
 # so the whole attachment is one object with a typed backend reference and a
@@ -9,7 +9,10 @@
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: EnvoyExtensionPolicy
 metadata:
-  name: semantic-router
+  # This intentionally replaces the base chat BBR policy with the same name.
+  # Envoy Gateway accepts one policy per target section, so both processors
+  # are kept in one ordered extProc list while semantic routing is installed.
+  name: model-body-router-chat
   namespace: ai-demo
 spec:
   targetRefs:
@@ -32,5 +35,17 @@ spec:
         request:
           # The model is chosen from the chat body, so the body is buffered
           # before the router is called.
+          body: Buffered
+        response: {}
+    - backendRefs:
+        - group: gateway.envoyproxy.io
+          kind: Backend
+          name: body-based-router
+      # Pool selection is part of the serving path. If BBR is down, do not
+      # silently send a selected accelerator model to the shared CPU fixture.
+      failOpen: false
+      messageTimeout: 10s
+      processingMode:
+        request:
           body: Buffered
         response: {}

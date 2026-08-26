@@ -10,8 +10,18 @@ case "$ctx" in kind-ai-gw-kuadrant|kind-ai-gw-envoy|kind-ai-gw-agent) ;; *) echo
 
 echo "==> Keycloak in $ctx"
 keycloak_existed=false
+realm_changed=true
 if kubectl --context "$ctx" -n ai-demo get deployment/keycloak >/dev/null 2>&1; then
   keycloak_existed=true
+fi
+if kubectl --context "$ctx" -n ai-demo get configmap/keycloak-realm -o json 2>/dev/null |
+  python3 -c '
+import json, pathlib, sys
+current = json.load(sys.stdin).get("data", {}).get("ai-gateway-realm.json", "")
+expected = pathlib.Path(sys.argv[1]).read_text()
+raise SystemExit(0 if current == expected else 1)
+' "$ROOT/keycloak/realm/ai-gateway-realm.json"; then
+  realm_changed=false
 fi
 kubectl --context "$ctx" create namespace ai-demo \
   --dry-run=client -o yaml | kubectl --context "$ctx" apply -f -
@@ -28,7 +38,7 @@ fi
 # make changes to the declarative realm file take effect. A newly created
 # Deployment already starts with the current ConfigMap and needs no second
 # ReplicaSet.
-if $keycloak_existed; then
+if $keycloak_existed && $realm_changed; then
   kubectl --context "$ctx" -n ai-demo rollout restart deployment/keycloak
 fi
 kubectl --context "$ctx" -n ai-demo rollout status deployment/keycloak --timeout=5m

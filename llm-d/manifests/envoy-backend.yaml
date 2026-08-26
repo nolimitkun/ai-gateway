@@ -1,0 +1,18 @@
+# The upstream BBR enables TLS with an ephemeral self-signed certificate and
+# currently exposes no flag for supplying a stable CA. Envoy Gateway's Backend
+# resource lets the ext_proc client originate HTTP/2 TLS while deliberately
+# skipping certificate verification in this local comparison fixture.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: body-based-router
+  namespace: ai-demo
+spec:
+  endpoints:
+    - fqdn:
+        hostname: body-based-router.ai-demo.svc.cluster.local
+        port: 9004
+  tls:
+    alpnProtocols:
+      - h2
+    insecureSkipVerify: true

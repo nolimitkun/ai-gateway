@@ -76,7 +76,14 @@ sys.exit(0 if any(c.get("type") == want and c.get("status") == "True"
 attachment_for() {
   case "$1" in
     "$KUADRANT_CTX") echo "$MANIFESTS/kuadrant-extproc.yaml" ;;
-    "$ENVOY_CTX") echo "$MANIFESTS/envoy-extproc.yaml" ;;
+    "$ENVOY_CTX")
+      if kubectl --context "$1" -n ai-demo get httproute kserve-mock \
+        -o 'jsonpath={.spec.rules[*].name}' 2>/dev/null | grep -qw model-kimi-k3; then
+        echo "$MANIFESTS/envoy-extproc-pools.yaml"
+      else
+        echo "$MANIFESTS/envoy-extproc.yaml"
+      fi
+      ;;
     "$AGENT_CTX") echo "$MANIFESTS/agentgateway-extproc.yaml" ;;
   esac
 }
@@ -89,6 +96,16 @@ if $DELETE; then
     # that no longer exists would fail open on every request until the filter
     # is withdrawn, which reads like a routing bug rather than a teardown.
     kubectl --context "$ctx" delete -f "$(attachment_for "$ctx")" --ignore-not-found
+    # The Envoy semantic attachment replaces the always-on chat BBR policy.
+    # Restore the base policy before removing the processor workload.
+    if [[ "$ctx" == "$ENVOY_CTX" ]]; then
+      if kubectl --context "$ctx" -n ai-demo get httproute kserve-mock \
+        -o 'jsonpath={.spec.rules[*].name}' | grep -qw model-kimi-k3; then
+        kubectl --context "$ctx" apply -f "$ROOT/llm-d/manifests/envoy-chat-extproc-pools.yaml"
+      else
+        kubectl --context "$ctx" apply -f "$ROOT/llm-d/manifests/envoy-chat-extproc.yaml"
+      fi
+    fi
     kubectl --context "$ctx" delete -f "$MANIFESTS/semantic-router.yaml" --ignore-not-found
     kubectl --context "$ctx" -n ai-demo delete configmap semantic-router-config --ignore-not-found
   done
@@ -110,9 +127,13 @@ for ctx in "$KUADRANT_CTX" "$ENVOY_CTX" "$AGENT_CTX"; do
     deployment/semantic-router --timeout=5m
 
   echo "==> ext_proc attachment in $ctx"
+  if [[ "$ctx" == "$ENVOY_CTX" ]]; then
+    kubectl --context "$ctx" -n ai-demo delete \
+      envoyextensionpolicy/semantic-router --ignore-not-found
+  fi
   kubectl --context "$ctx" apply -f "$(attachment_for "$ctx")"
   case "$ctx" in
-    "$ENVOY_CTX") wait_condition "$ctx" envoyextensionpolicy/semantic-router Accepted ;;
+    "$ENVOY_CTX") wait_condition "$ctx" envoyextensionpolicy/model-body-router-chat Accepted ;;
     "$AGENT_CTX") wait_condition "$ctx" agentgatewaypolicy/kserve-mock-semantic-router Accepted ;;
     # An EnvoyFilter has no status to wait on. `make compare CLUSTER=<name>` waits for the
     # data plane itself before it measures anything, which is the only check

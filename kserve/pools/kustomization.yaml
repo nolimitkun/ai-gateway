@@ -4,6 +4,7 @@ kind: Kustomization
 # kserve/kustomization.yaml, which supplies the namespace, the runtime source
 # ConfigMap, and the empty CPU presets.
 resources:
+  - route.yaml
   - kserve-b300.yaml
   - kserve-h200.yaml
   - kserve-h100.yaml

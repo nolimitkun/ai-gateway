@@ -57,9 +57,11 @@ spec:
               envoy_grpc:
                 cluster_name: outbound|50051||semantic-router.ai-demo.svc.cluster.local
               timeout: 10s
-    # Disable the listener-level filter by default. The chat route below is
-    # the only route that opts back in, so task APIs and Keycloak bypass the
-    # semantic router rather than receiving its chat-only 404 response.
+    # Disable the listener-level filter by default. The chat routes below opt
+    # back in, so task APIs and Keycloak bypass the semantic router rather than
+    # receiving its chat-only 404 response. Every model-specific chat section
+    # is included because a client-forged internal header can affect Envoy's
+    # initial route choice before BBR overwrites it and clears the route cache.
     - applyTo: VIRTUAL_HOST
       match:
         context: GATEWAY
@@ -77,7 +79,7 @@ spec:
           vhost:
             route:
               name: chat
-      patch:
+      patch: &semantic_chat_route_patch
         operation: MERGE
         value:
           typed_per_filter_config:
@@ -96,6 +98,21 @@ spec:
                     cluster_name: outbound|50051||semantic-router.ai-demo.svc.cluster.local
                   timeout: 10s
                 failure_mode_allow: true
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-kimi-k3}}}}
+      patch: *semantic_chat_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-glm-5-3}}}}
+      patch: *semantic_chat_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-deepseek-v4-pro}}}}
+      patch: *semantic_chat_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-deepseek-v4-flash}}}}
+      patch: *semantic_chat_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-qwen3-8-27b}}}}
+      patch: *semantic_chat_route_patch
 ---
 # Istio would otherwise offer mTLS to the router, which is not in the mesh and
 # terminates plaintext h2c. Without this the ext_proc calls fail the TLS

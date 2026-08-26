@@ -30,11 +30,31 @@ spec:
             - selector: auth.identity.groups
               operator: incl
               value: model-users
-      big-tier-is-admin-only:
+      kimi-k3-is-admin-only:
         when:
-          - selector: request.headers.x-model-class
+          - selector: request.headers.x-gateway-model-name
             operator: eq
-            value: b300
+            value: kimi-k3
+        patternMatching:
+          patterns:
+            - selector: auth.identity.groups
+              operator: incl
+              value: platform-admins
+      glm-5-3-is-admin-only:
+        when:
+          - selector: request.headers.x-gateway-model-name
+            operator: eq
+            value: glm-5.3
+        patternMatching:
+          patterns:
+            - selector: auth.identity.groups
+              operator: incl
+              value: platform-admins
+      deepseek-v4-pro-is-admin-only:
+        when:
+          - selector: request.headers.x-gateway-model-name
+            operator: eq
+            value: deepseek-v4-pro
         patternMatching:
           patterns:
             - selector: auth.identity.groups

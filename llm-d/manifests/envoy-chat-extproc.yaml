@@ -1,0 +1,26 @@
+# Envoy Gateway applies at most one EnvoyExtensionPolicy to a route section.
+# This base policy handles explicit chat models. The optional semantic-router
+# installer replaces this same object with an ordered semantic-router -> BBR
+# chain, so an `auto` decision is also converted into a pool-routing header.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: model-body-router-chat
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+      sectionName: chat
+  extProc:
+    - backendRefs:
+        - group: gateway.envoyproxy.io
+          kind: Backend
+          name: body-based-router
+      failOpen: false
+      messageTimeout: 10s
+      processingMode:
+        request:
+          body: Buffered
+        response: {}

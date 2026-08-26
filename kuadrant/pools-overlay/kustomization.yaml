@@ -12,7 +12,7 @@ patches:
       group: gateway.networking.k8s.io
       version: v1
       kind: HTTPRoute
-      name: kserve-b300
+      name: kserve-mock
     patch: |-
       - op: replace
         path: /spec/parentRefs/0/name
@@ -37,18 +37,6 @@ patches:
         value: kserve-b300-epp-tls
 
   - target:
-      group: gateway.networking.k8s.io
-      version: v1
-      kind: HTTPRoute
-      name: kserve-h200
-    patch: |-
-      - op: replace
-        path: /spec/parentRefs/0/name
-        value: openshift-ai-inference
-      - op: add
-        path: /spec/parentRefs/0/namespace
-        value: openshift-ingress
-  - target:
       group: serving.kserve.io
       version: v1alpha2
       kind: LLMInferenceService
@@ -65,18 +53,6 @@ patches:
         value: kserve-h200-epp-tls
 
   - target:
-      group: gateway.networking.k8s.io
-      version: v1
-      kind: HTTPRoute
-      name: kserve-h100
-    patch: |-
-      - op: replace
-        path: /spec/parentRefs/0/name
-        value: openshift-ai-inference
-      - op: add
-        path: /spec/parentRefs/0/namespace
-        value: openshift-ingress
-  - target:
       group: serving.kserve.io
       version: v1alpha2
       kind: LLMInferenceService
@@ -92,18 +68,6 @@ patches:
         path: /spec/router/scheduler/template/volumes/0/secret/secretName
         value: kserve-h100-epp-tls
 
-  - target:
-      group: gateway.networking.k8s.io
-      version: v1
-      kind: HTTPRoute
-      name: kserve-l40s
-    patch: |-
-      - op: replace
-        path: /spec/parentRefs/0/name
-        value: openshift-ai-inference
-      - op: add
-        path: /spec/parentRefs/0/namespace
-        value: openshift-ingress
   - target:
       group: serving.kserve.io
       version: v1alpha2
