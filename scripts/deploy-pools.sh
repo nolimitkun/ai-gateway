@@ -6,6 +6,7 @@
 # derives the internal routing header. Run `make up CLUSTER=<name>` first.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/component-env.sh"
 POOLS=(b300 h200 h100 l40s)
 DELETE=false
 ctx=""
@@ -27,24 +28,29 @@ while (($#)); do
   esac
 done
 case "$ctx" in kind-ai-gw-kuadrant) base="${base:-http://localhost:8082}" ;; kind-ai-gw-envoy) base="${base:-http://localhost:8080}" ;; kind-ai-gw-agent) base="${base:-http://localhost:8081}" ;; *) echo "--context must name one comparison context" >&2; exit 2 ;; esac
+select_context_components "$ctx"
+KSERVE_BASE="$COMPONENT_ROOT/kserve/base"
+KSERVE_POOLS="$COMPONENT_ROOT/kserve/pools"
+LLMD_MANIFESTS="$COMPONENT_ROOT/llm-d"
+SEMANTIC_MANIFESTS="$COMPONENT_ROOT/semantic-router"
 
 if $DELETE; then
   echo "==> removing accelerator pools from $ctx"
   if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
-    kubectl --context "$ctx" delete -k "$ROOT/kuadrant/pools-overlay" --ignore-not-found
+    kubectl --context "$ctx" delete -k "$KSERVE_POOLS" --ignore-not-found
     # The pool overlay owns the expanded form of the shared route. Reconcile
     # its base form after deleting the optional pools.
-    kubectl --context "$ctx" apply -k "$ROOT/kuadrant/kserve-overlay"
+    kubectl --context "$ctx" apply -k "$KSERVE_BASE"
   else
-    kubectl --context "$ctx" delete -k "$ROOT/kserve/pools" --ignore-not-found
-    kubectl --context "$ctx" apply -f "$ROOT/kserve/manifests/route.yaml"
+    kubectl --context "$ctx" delete -k "$KSERVE_POOLS" --ignore-not-found
+    kubectl --context "$ctx" apply -f "$KSERVE_BASE/route.yaml"
     if [[ "$ctx" == "kind-ai-gw-envoy" ]]; then
       if kubectl --context "$ctx" -n ai-demo get deployment semantic-router >/dev/null 2>&1; then
-        kubectl --context "$ctx" apply -f "$ROOT/semantic-router/manifests/envoy-extproc.yaml"
+        kubectl --context "$ctx" apply -f "$SEMANTIC_MANIFESTS/envoy-extproc.yaml"
       else
-        kubectl --context "$ctx" apply -f "$ROOT/llm-d/manifests/envoy-chat-extproc.yaml"
+        kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-chat-extproc.yaml"
       fi
-      kubectl --context "$ctx" apply -f "$ROOT/llm-d/manifests/envoy-task-extproc.yaml"
+      kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-task-extproc.yaml"
     fi
   fi
   echo "OK: accelerator pools removed; the shared KServe path is untouched"
@@ -112,13 +118,13 @@ wait_for_object() {
 echo "==> accelerator pools in $ctx"
 require_base "$ctx"
 if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
-  kubectl --context "$ctx" apply -k "$ROOT/kuadrant/pools-overlay"
+  kubectl --context "$ctx" apply -k "$KSERVE_POOLS"
   for pool in "${POOLS[@]}"; do
     kubectl --context "$ctx" -n ai-demo wait "certificate/kserve-$pool-epp-server" \
       --for=condition=Ready --timeout=3m
   done
 else
-  kubectl --context "$ctx" apply -k "$ROOT/kserve/pools"
+  kubectl --context "$ctx" apply -k "$KSERVE_POOLS"
 fi
 
 # Envoy Gateway policies target named route sections. Once pool-specific
@@ -126,11 +132,11 @@ fi
 # on the request's initial route selection.
 if [[ "$ctx" == "kind-ai-gw-envoy" ]]; then
   if kubectl --context "$ctx" -n ai-demo get deployment semantic-router >/dev/null 2>&1; then
-    kubectl --context "$ctx" apply -f "$ROOT/semantic-router/manifests/envoy-extproc-pools.yaml"
+    kubectl --context "$ctx" apply -f "$SEMANTIC_MANIFESTS/envoy-extproc-pools.yaml"
   else
-    kubectl --context "$ctx" apply -f "$ROOT/llm-d/manifests/envoy-chat-extproc-pools.yaml"
+    kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-chat-extproc-pools.yaml"
   fi
-  kubectl --context "$ctx" apply -f "$ROOT/llm-d/manifests/envoy-task-extproc-pools.yaml"
+  kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-task-extproc-pools.yaml"
 fi
 
 # The shared route is applied in the same transaction as four

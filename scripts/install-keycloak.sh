@@ -5,8 +5,10 @@
 # issuer it can resolve in-cluster.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/component-env.sh"
 ctx="${1:?usage: install-keycloak.sh <kubectl-context>}"
 case "$ctx" in kind-ai-gw-kuadrant|kind-ai-gw-envoy|kind-ai-gw-agent) ;; *) echo "unsupported context: $ctx" >&2; exit 2 ;; esac
+select_context_components "$ctx"
 
 echo "==> Keycloak in $ctx"
 keycloak_existed=false
@@ -28,11 +30,7 @@ kubectl --context "$ctx" create namespace ai-demo \
 kubectl --context "$ctx" -n ai-demo create configmap keycloak-realm \
   --from-file=ai-gateway-realm.json="$ROOT/keycloak/realm/ai-gateway-realm.json" \
   --dry-run=client -o yaml | kubectl --context "$ctx" apply -f -
-if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
-  kubectl --context "$ctx" apply -k "$ROOT/overlays/keycloak-openshift"
-else
-  kubectl --context "$ctx" apply -k "$ROOT/keycloak"
-fi
+kubectl --context "$ctx" apply -k "$COMPONENT_ROOT/keycloak"
 # Realm import only runs when Keycloak starts. The development deployment
 # intentionally has no persistent database, so restart an existing pod to
 # make changes to the declarative realm file take effect. A newly created

@@ -1,0 +1,181 @@
+# vLLM Semantic Router configuration, shared by all three gateway stacks.
+#
+# The router is an Envoy external processor: it reads the chat request body,
+# decides which model should answer, rewrites the body's `model` field, and
+# adds x-vsr-* headers describing the decision. The gateway then routes the
+# rewritten request down the ordinary KServe path, so the decision is visible
+# in the answer itself -- the mock runtime reports the model it served and the
+# tier that model belongs to.
+#
+# Only a request whose model is an auto alias ("auto", "MoM", "vllm-sr/auto")
+# is resolved by the router. A request naming a concrete model is forwarded
+# untouched, which is why adding this layer leaves every existing comparison
+# row unchanged.
+#
+# Decisions are matched by keyword rather than by the domain classifier. That
+# is a deliberate fixture choice: keyword rules are regular expressions
+# evaluated in-process, so this configuration downloads no models, starts in
+# seconds, and returns the same decision on every run. Domain signals need the
+# MoM classifier models -- see the classifier overlay in the README for the
+# configuration that trades determinism and about 3 GiB of memory per cluster
+# for real intent classification.
+version: v0.3
+
+listeners:
+  - name: grpc-50051
+    address: 0.0.0.0
+    port: 50051
+    timeout: 300s
+  - name: http-8080
+    address: 0.0.0.0
+    port: 8080
+    timeout: 300s
+
+providers:
+  defaults:
+    # An auto request that matches no decision is answered by the CPU fixture
+    # model, so "no decision matched" is distinguishable from every routed
+    # outcome: mock-kserve is the only model whose tier is `fixture`.
+    default_model: mock-kserve
+    default_reasoning_effort: medium
+    # How each model family is told to think harder. The fixture runtime
+    # ignores the flag; declaring it is what lets a decision ask for reasoning
+    # without the router dropping the request on an unknown family.
+    reasoning_families:
+      qwen3:
+        type: chat_template_kwargs
+        parameter: enable_thinking
+      deepseek:
+        type: chat_template_kwargs
+        parameter: thinking
+      kimi:
+        type: chat_template_kwargs
+        parameter: thinking
+  # One KServe service answers for the whole catalog, so every model resolves
+  # to the same backend endpoint. The router selects the model; the gateway,
+  # the InferencePool, and the endpoint picker still select the pod.
+  models:
+    - name: kimi-k3
+      reasoning_family: kimi
+      backend_refs:
+        - name: kserve-mock
+          endpoint: kserve-mock-kserve.ai-demo.svc.cluster.local:8000
+          weight: 1
+    - name: deepseek-v4-flash
+      reasoning_family: deepseek
+      backend_refs:
+        - name: kserve-mock
+          endpoint: kserve-mock-kserve.ai-demo.svc.cluster.local:8000
+          weight: 1
+    - name: qwen3.8-27b
+      reasoning_family: qwen3
+      backend_refs:
+        - name: kserve-mock
+          endpoint: kserve-mock-kserve.ai-demo.svc.cluster.local:8000
+          weight: 1
+    - name: mock-kserve
+      backend_refs:
+        - name: kserve-mock
+          endpoint: kserve-mock-kserve.ai-demo.svc.cluster.local:8000
+          weight: 1
+
+routing:
+  decisions:
+    # Highest priority: work that is worth the largest model in the catalog.
+    - name: deep-reasoning
+      description: Proofs, derivations, and multi-step quantitative reasoning
+      priority: 30
+      rules:
+        operator: OR
+        conditions:
+          - type: keyword
+            name: reasoning
+      modelRefs:
+        - model: kimi-k3
+          use_reasoning: true
+      plugins:
+        - type: system_prompt
+          configuration:
+            enabled: true
+            mode: replace
+            system_prompt: Work step by step and state the reasoning behind each step.
+    - name: code
+      description: Programming, debugging, and refactoring questions
+      priority: 20
+      rules:
+        operator: OR
+        conditions:
+          - type: keyword
+            name: code
+      modelRefs:
+        - model: deepseek-v4-flash
+          use_reasoning: false
+      plugins:
+        - type: system_prompt
+          configuration:
+            enabled: true
+            mode: replace
+            system_prompt: Answer with working code and explain the change briefly.
+    # Lowest priority: short conversational turns do not need a large model.
+    - name: small-talk
+      description: Greetings and short conversational turns
+      priority: 10
+      rules:
+        operator: OR
+        conditions:
+          - type: keyword
+            name: small-talk
+      modelRefs:
+        - model: qwen3.8-27b
+          use_reasoning: false
+
+  signals:
+    keywords:
+      - name: reasoning
+        operator: OR
+        case_sensitive: false
+        keywords:
+          - prove
+          - theorem
+          - derive
+          - integral
+          - step by step
+      - name: code
+        operator: OR
+        case_sensitive: false
+        keywords:
+          - function
+          - refactor
+          - stack trace
+          - compile
+          - python
+      - name: small-talk
+        operator: OR
+        case_sensitive: false
+        keywords:
+          - hello
+          - hi there
+          - thanks
+          - good morning
+
+  modelCards:
+    - name: kimi-k3
+    - name: deepseek-v4-flash
+    - name: qwen3.8-27b
+    - name: mock-kserve
+
+global:
+  router:
+    strategy: priority
+  stores:
+    # Every store below embeds text, and an embedding model is a download this
+    # fixture deliberately does not make.
+    response_cache:
+      enabled: false
+  integrations:
+    tools:
+      enabled: false
+  services:
+    observability:
+      tracing:
+        enabled: false

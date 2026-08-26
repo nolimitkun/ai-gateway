@@ -33,19 +33,12 @@ CHARTS = (
 )
 
 MANIFESTS = (
-    "kuadrant/manifests/*.yaml",
-    "kuadrant/policies/*.yaml",
-    "kuadrant/pools-overlay/*.yaml",
-    "envoy-ai-gateway/manifests/*.yaml",
-    "envoy-ai-gateway/policies/*.yaml",
-    "agentgateway/manifests/*.yaml",
-    "agentgateway/policies/*.yaml",
-    "keycloak/manifests/*.yaml",
-    "kserve/manifests/*.yaml",
-    "kserve/pools/*.yaml",
+    "kuadrant/deploy/**/*.yaml",
+    "envoy-ai-gateway/deploy/**/*.yaml",
+    "agentgateway/deploy/**/*.yaml",
+    # The production package also supports arbitrary external GPU contexts,
+    # so its shared compatibility entry point remains validated separately.
     "kserve/production/*.yaml",
-    "llm-d/manifests/*.yaml",
-    "semantic-router/manifests/*.yaml",
 )
 
 
@@ -143,7 +136,7 @@ def main(argv):
     schemas = load_schemas()
     files = argv or sorted(
         {path for pattern in MANIFESTS
-         for path in glob.glob(os.path.join(ROOT, pattern))}
+         for path in glob.glob(os.path.join(ROOT, pattern), recursive=True)}
     )
     checked = skipped = 0
     errors = []

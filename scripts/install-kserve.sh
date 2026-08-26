@@ -4,10 +4,12 @@
 # and Gateway API Inference Extension CRDs.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/component-env.sh"
 KSERVE_VERSION="${KSERVE_VERSION:-v0.20.0}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.17.0}"
 ctx="${1:?usage: install-kserve.sh <kubectl-context>}"
 case "$ctx" in kind-ai-gw-kuadrant|kind-ai-gw-envoy|kind-ai-gw-agent) ;; *) echo "unsupported context: $ctx" >&2; exit 2 ;; esac
+select_context_components "$ctx"
 
 H=(helm --kube-context "$ctx")
 
@@ -26,7 +28,7 @@ echo "==> KServe LLMInferenceService controller $KSERVE_VERSION in $ctx"
 "${H[@]}" upgrade -i kserve-llmisvc-resources \
   "$ROOT/kserve/charts/kserve-llmisvc-resources-${KSERVE_VERSION}.tgz" \
   --namespace kserve --create-namespace \
-  -f "$ROOT/kserve/values/kserve-llmisvc.values.yaml" \
+  -f "$COMPONENT_ROOT/kserve/controller-values.yaml" \
   --wait --timeout 5m
 
 kubectl --context "$ctx" -n kserve rollout status \

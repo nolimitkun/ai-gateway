@@ -25,10 +25,35 @@ except ImportError:  # pragma: no cover - PyYAML ships with the tooling
     sys.exit("PyYAML is required: pip install pyyaml")
 
 ROOT = Path(__file__).resolve().parent.parent
-CONFIG = ROOT / "semantic-router" / "config" / "router-config.yaml"
+STACK_ROOTS = tuple(
+    ROOT / stack / "deploy"
+    for stack in ("kuadrant", "envoy-ai-gateway", "agentgateway")
+)
+CONFIG = STACK_ROOTS[0] / "semantic-router" / "router-config.yaml"
 COMPARISON = ROOT / "compare" / "run-gateway.py"
-POOL_ROUTE = ROOT / "kserve" / "pools" / "route.yaml"
-KUADRANT_ROUTER = ROOT / "semantic-router" / "manifests" / "kuadrant-extproc.yaml"
+POOL_ROUTE = STACK_ROOTS[0] / "kserve" / "pools" / "route.yaml"
+KUADRANT_ROUTER = STACK_ROOTS[0] / "semantic-router" / "kuadrant-extproc.yaml"
+
+SHARED_COMPONENTS = (
+    "kserve/controller-values.yaml",
+    "kserve/base/cpu-presets.yaml",
+    "kserve/base/llmisvc.yaml",
+    "kserve/base/route.yaml",
+    "kserve/pools/route.yaml",
+    "kserve/pools/kserve-b300.yaml",
+    "kserve/pools/kserve-h200.yaml",
+    "kserve/pools/kserve-h100.yaml",
+    "kserve/pools/kserve-l40s.yaml",
+    "kserve/production/kustomization.yaml",
+    "kserve/production/models.yaml",
+    "kserve/production/routes.yaml",
+    "kserve/production/vllm-config.yaml",
+    "llm-d/body-based-router.yaml",
+    "keycloak/keycloak.yaml",
+    "keycloak/route.yaml",
+    "semantic-router/router-config.yaml",
+    "semantic-router/semantic-router.yaml",
+)
 
 sys.path.insert(0, str(ROOT / "mock-llm"))
 from server import CATALOG  # noqa: E402
@@ -67,6 +92,18 @@ def comparison_prompts():
 
 def main():
     problems = []
+
+    # Shared resources are intentionally repeated inside all three deployment
+    # trees so each gateway can be understood in isolation. Keep those copies
+    # byte-identical; gateway-specific Kustomizations and attachments are not
+    # part of this list.
+    for relative in SHARED_COMPONENTS:
+        contents = [(root / relative).read_bytes() for root in STACK_ROOTS]
+        if len(set(contents)) != 1:
+            problems.append(
+                f"shared component '{relative}' differs between gateway trees"
+            )
+
     config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     providers = config["providers"]
     routing = config["routing"]
@@ -275,7 +312,8 @@ def main():
         print(problem, file=sys.stderr)
     for prompt, model in selected.items():
         print(f"{prompt!r} -> {model}")
-    print(f"{len(declared)} semantic models, {len(actual_pool_routes)} body.model routes, "
+    print(f"{len(SHARED_COMPONENTS)} synchronized shared manifests, "
+          f"{len(declared)} semantic models, {len(actual_pool_routes)} body.model routes, "
           f"{len(decisions)} decisions, {len(selected)} comparison prompts, "
           f"{len(problems)} problems")
     return 1 if problems else 0

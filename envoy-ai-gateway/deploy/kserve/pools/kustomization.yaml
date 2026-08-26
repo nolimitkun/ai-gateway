@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# One KServe serving pool per accelerator class. Deploy this after ../base,
+# which supplies the runtime source ConfigMap and empty CPU presets.
+resources:
+  - route.yaml
+  - kserve-b300.yaml
+  - kserve-h200.yaml
+  - kserve-h100.yaml
+  - kserve-l40s.yaml

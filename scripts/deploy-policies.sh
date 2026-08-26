@@ -9,6 +9,7 @@
 # script layers the security and traffic policies on top of that same path.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/component-env.sh"
 KUADRANT_CTX=kind-ai-gw-kuadrant
 ENVOY_CTX=kind-ai-gw-envoy
 AGENT_CTX=kind-ai-gw-agent
@@ -37,6 +38,7 @@ case "$SELECTED_CONTEXT" in
   "$KUADRANT_CTX"|"$ENVOY_CTX"|"$AGENT_CTX") ;;
   *) echo "unsupported policy context: $SELECTED_CONTEXT" >&2; exit 2 ;;
 esac
+select_context_components "$SELECTED_CONTEXT"
 
 context_selected() {
   [[ "$SELECTED_CONTEXT" == "$1" ]]
@@ -72,35 +74,31 @@ sys.exit(0 if any(c.get("type") == want and c.get("status") == "True"
 if $DELETE; then
   if context_selected "$KUADRANT_CTX"; then
     echo "==> removing policies from $KUADRANT_CTX"
-    kubectl --context "$KUADRANT_CTX" delete -k "$ROOT/kuadrant/policies" --ignore-not-found
-    kubectl --context "$KUADRANT_CTX" apply -f "$ROOT/kuadrant/manifests/policy.yaml"
+    kubectl --context "$KUADRANT_CTX" delete -k "$COMPONENT_ROOT/policies" --ignore-not-found
+    kubectl --context "$KUADRANT_CTX" apply -f "$COMPONENT_ROOT/gateway/policy.yaml"
   fi
 
   if context_selected "$ENVOY_CTX"; then
     echo "==> removing policies from $ENVOY_CTX"
-    kubectl --context "$ENVOY_CTX" delete -f "$ROOT/envoy-ai-gateway/policies/rate-limit.yaml" --ignore-not-found
-    kubectl --context "$ENVOY_CTX" delete -f "$ROOT/envoy-ai-gateway/policies/security-policy.yaml" --ignore-not-found
-    kubectl --context "$ENVOY_CTX" delete -f "$ROOT/envoy-ai-gateway/policies/ai-route.yaml" --ignore-not-found
+    kubectl --context "$ENVOY_CTX" delete -f "$COMPONENT_ROOT/policies/rate-limit.yaml" --ignore-not-found
+    kubectl --context "$ENVOY_CTX" delete -f "$COMPONENT_ROOT/policies/security-policy.yaml" --ignore-not-found
+    kubectl --context "$ENVOY_CTX" delete -f "$COMPONENT_ROOT/policies/ai-route.yaml" --ignore-not-found
     helm --kube-context "$ENVOY_CTX" upgrade -i eg \
       "$ROOT/envoy-ai-gateway/charts/gateway-helm-${EG_VERSION}.tgz" \
       --namespace envoy-gateway-system \
       -f "$ROOT/envoy-ai-gateway/values/envoy-gateway.values.yaml" --wait --timeout 5m
-    kubectl --context "$ENVOY_CTX" delete -f "$ROOT/envoy-ai-gateway/policies/redis.yaml" --ignore-not-found
+    kubectl --context "$ENVOY_CTX" delete -f "$COMPONENT_ROOT/policies/redis.yaml" --ignore-not-found
   fi
 
   if context_selected "$AGENT_CTX"; then
     echo "==> removing policies from $AGENT_CTX"
-    kubectl --context "$AGENT_CTX" delete -f "$ROOT/agentgateway/policies" --ignore-not-found
+    kubectl --context "$AGENT_CTX" delete -f "$COMPONENT_ROOT/policies" --ignore-not-found
   fi
 
   for ctx in "$KUADRANT_CTX" "$ENVOY_CTX" "$AGENT_CTX"; do
     context_selected "$ctx" || continue
     echo "==> removing Keycloak from $ctx"
-    if [[ "$ctx" == "$KUADRANT_CTX" ]]; then
-      kubectl --context "$ctx" delete -k "$ROOT/overlays/keycloak-openshift" --ignore-not-found
-    else
-      kubectl --context "$ctx" delete -k "$ROOT/keycloak" --ignore-not-found
-    fi
+    kubectl --context "$ctx" delete -k "$COMPONENT_ROOT/keycloak" --ignore-not-found
     kubectl --context "$ctx" -n ai-demo delete configmap keycloak-realm --ignore-not-found
   done
 
@@ -112,7 +110,7 @@ bash "$ROOT/scripts/install-keycloak.sh" "$SELECTED_CONTEXT"
 
 if context_selected "$KUADRANT_CTX"; then
   echo "==> Kuadrant AuthPolicy, RateLimitPolicy, and TokenRateLimitPolicy"
-  kubectl --context "$KUADRANT_CTX" apply -k "$ROOT/kuadrant/policies"
+  kubectl --context "$KUADRANT_CTX" apply -k "$COMPONENT_ROOT/policies"
   wait_condition "$KUADRANT_CTX" authpolicy/kserve-mock Enforced
   wait_condition "$KUADRANT_CTX" ratelimitpolicy/kserve-mock Enforced
   wait_condition "$KUADRANT_CTX" tokenratelimitpolicy/kserve-mock Enforced
@@ -121,7 +119,7 @@ fi
 if context_selected "$ENVOY_CTX"; then
   echo "==> Envoy Gateway rate limit backend"
   bash "$ROOT/scripts/fix-envoy-gateway-crd.sh" "$ENVOY_CTX"
-  kubectl --context "$ENVOY_CTX" apply -f "$ROOT/envoy-ai-gateway/policies/redis.yaml"
+  kubectl --context "$ENVOY_CTX" apply -f "$COMPONENT_ROOT/policies/redis.yaml"
   kubectl --context "$ENVOY_CTX" -n redis-system rollout status deployment/redis --timeout=5m
   helm --kube-context "$ENVOY_CTX" upgrade -i eg \
     "$ROOT/envoy-ai-gateway/charts/gateway-helm-${EG_VERSION}.tgz" \
@@ -136,16 +134,16 @@ if context_selected "$ENVOY_CTX"; then
   # The AIGatewayRoute first: the SecurityPolicy protects the HTTPRoute the AI
   # Gateway controller generates from it, so that route has to exist to be
   # referenced.
-  kubectl --context "$ENVOY_CTX" apply -f "$ROOT/envoy-ai-gateway/policies/ai-route.yaml"
-  kubectl --context "$ENVOY_CTX" apply -f "$ROOT/envoy-ai-gateway/policies/security-policy.yaml"
-  kubectl --context "$ENVOY_CTX" apply -f "$ROOT/envoy-ai-gateway/policies/rate-limit.yaml"
+  kubectl --context "$ENVOY_CTX" apply -f "$COMPONENT_ROOT/policies/ai-route.yaml"
+  kubectl --context "$ENVOY_CTX" apply -f "$COMPONENT_ROOT/policies/security-policy.yaml"
+  kubectl --context "$ENVOY_CTX" apply -f "$COMPONENT_ROOT/policies/rate-limit.yaml"
   wait_condition "$ENVOY_CTX" securitypolicy/kserve-mock Accepted
   wait_condition "$ENVOY_CTX" backendtrafficpolicy/kserve-mock Accepted
 fi
 
 if context_selected "$AGENT_CTX"; then
   echo "==> agentgateway JWT, authorization, rate limit, and CORS policies"
-  kubectl --context "$AGENT_CTX" apply -f "$ROOT/agentgateway/policies"
+  kubectl --context "$AGENT_CTX" apply -f "$COMPONENT_ROOT/policies"
   wait_condition "$AGENT_CTX" agentgatewaypolicy/kserve-mock-jwt Accepted
 fi
 

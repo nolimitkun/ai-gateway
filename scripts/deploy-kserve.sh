@@ -3,9 +3,14 @@
 # selected gateway comparison cluster.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/component-env.sh"
 ctx="${1:?usage: deploy-kserve.sh <kubectl-context>}"
-BBR_MANIFESTS="$ROOT/llm-d/manifests"
 case "$ctx" in kind-ai-gw-kuadrant|kind-ai-gw-envoy|kind-ai-gw-agent) ;; *) echo "unsupported context: $ctx" >&2; exit 2 ;; esac
+select_context_components "$ctx"
+KSERVE_BASE="$COMPONENT_ROOT/kserve/base"
+KSERVE_POOLS="$COMPONENT_ROOT/kserve/pools"
+BBR_MANIFESTS="$COMPONENT_ROOT/llm-d"
+SEMANTIC_MANIFESTS="$COMPONENT_ROOT/semantic-router"
 pools_present=false
 if kubectl --context "$ctx" -n ai-demo get llminferenceservice kserve-b300 >/dev/null 2>&1; then
   pools_present=true
@@ -75,22 +80,22 @@ raise SystemExit(0 if any(
 echo "==> KServe LLMInferenceService resources in $ctx"
 if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
   if $pools_present; then
-    kubectl --context "$ctx" apply -k "$ROOT/kuadrant/pools-overlay"
+    kubectl --context "$ctx" apply -k "$KSERVE_POOLS"
   else
-    kubectl --context "$ctx" apply -k "$ROOT/kuadrant/kserve-overlay"
+    kubectl --context "$ctx" apply -k "$KSERVE_BASE"
   fi
   kubectl --context "$ctx" -n ai-demo wait certificate/kserve-mock-epp-root-ca \
     --for=condition=Ready --timeout=3m
   kubectl --context "$ctx" -n ai-demo wait certificate/kserve-mock-epp-server \
     --for=condition=Ready --timeout=3m
 else
-  kubectl --context "$ctx" apply -f "$ROOT/kserve/manifests/cpu-presets.yaml"
+  kubectl --context "$ctx" apply -f "$KSERVE_BASE/cpu-presets.yaml"
   if $pools_present; then
-    kubectl --context "$ctx" apply -f "$ROOT/kserve/pools/route.yaml"
+    kubectl --context "$ctx" apply -f "$KSERVE_POOLS/route.yaml"
   else
-    kubectl --context "$ctx" apply -f "$ROOT/kserve/manifests/route.yaml"
+    kubectl --context "$ctx" apply -f "$KSERVE_BASE/route.yaml"
   fi
-  kubectl --context "$ctx" apply -f "$ROOT/kserve/manifests/llmisvc.yaml"
+  kubectl --context "$ctx" apply -f "$KSERVE_BASE/llmisvc.yaml"
 fi
 
 echo "==> OpenAI body.model routing in $ctx"
@@ -111,9 +116,9 @@ case "$ctx" in
     # reconcile; otherwise install the normal explicit-model chat processor.
     if kubectl --context "$ctx" -n ai-demo get deployment semantic-router >/dev/null 2>&1; then
       if $pools_present; then
-        kubectl --context "$ctx" apply -f "$ROOT/semantic-router/manifests/envoy-extproc-pools.yaml"
+        kubectl --context "$ctx" apply -f "$SEMANTIC_MANIFESTS/envoy-extproc-pools.yaml"
       else
-        kubectl --context "$ctx" apply -f "$ROOT/semantic-router/manifests/envoy-extproc.yaml"
+        kubectl --context "$ctx" apply -f "$SEMANTIC_MANIFESTS/envoy-extproc.yaml"
       fi
     else
       if $pools_present; then
@@ -152,7 +157,7 @@ print(json.dumps({
     "metadata": {"name": "kserve-mock-epp-ca", "namespace": "ai-demo"},
     "data": {"ca.crt": base64.b64decode(secret["data"]["ca.crt"]).decode()},
 }))' | kubectl --context "$ctx" apply -f -
-  kubectl --context "$ctx" apply -f "$ROOT/kuadrant/manifests/epp-tls.yaml"
+  kubectl --context "$ctx" apply -f "$KSERVE_BASE/epp-tls.yaml"
   kubectl --context "$ctx" -n ai-demo wait backendtlspolicy/kserve-mock-epp \
     --for=jsonpath='{.status.ancestors[0].conditions[0].status}'=True --timeout=3m
 fi

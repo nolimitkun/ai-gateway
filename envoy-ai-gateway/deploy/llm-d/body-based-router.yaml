@@ -1,0 +1,77 @@
+# Gateway API Inference Extension Body-Based Router (BBR).
+#
+# OpenAI-compatible clients put the model name in the JSON request body, while
+# Gateway API HTTPRoute matching operates on paths and headers. BBR bridges the
+# two: it copies body.model into the internal X-Gateway-Model-Name header and
+# clears Envoy's route cache. The recomputed route selects a KServe
+# InferencePool; that pool's llm-d EPP then selects a replica.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: body-based-router
+  namespace: ai-demo
+  labels:
+    app: body-based-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: body-based-router
+  template:
+    metadata:
+      labels:
+        app: body-based-router
+    spec:
+      containers:
+        - name: bbr
+          image: registry.k8s.io/gateway-api-inference-extension/bbr:v1.2.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - --grpc-port=9004
+            - --grpc-health-port=9005
+            - --metrics-port=9090
+            - --v=2
+          ports:
+            - name: grpc
+              containerPort: 9004
+            - name: grpc-health
+              containerPort: 9005
+            - name: metrics
+              containerPort: 9090
+          readinessProbe:
+            grpc:
+              port: 9005
+            periodSeconds: 2
+          livenessProbe:
+            grpc:
+              port: 9005
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: body-based-router
+  namespace: ai-demo
+spec:
+  selector:
+    app: body-based-router
+  ports:
+    - name: grpc
+      port: 9004
+      targetPort: grpc
+      appProtocol: grpc
+      protocol: TCP

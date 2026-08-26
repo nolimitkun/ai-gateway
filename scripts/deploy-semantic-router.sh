@@ -12,11 +12,10 @@
 # on its own, and only a request whose model is "auto" is resolved here.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/component-env.sh"
 KUADRANT_CTX=kind-ai-gw-kuadrant
 ENVOY_CTX=kind-ai-gw-envoy
 AGENT_CTX=kind-ai-gw-agent
-CONFIG="$ROOT/semantic-router/config/router-config.yaml"
-MANIFESTS="$ROOT/semantic-router/manifests"
 DELETE=false
 SELECTED_CONTEXT=""
 while (($#)); do
@@ -41,6 +40,10 @@ case "$SELECTED_CONTEXT" in
   "$KUADRANT_CTX"|"$ENVOY_CTX"|"$AGENT_CTX") ;;
   *) echo "unsupported semantic-router context: $SELECTED_CONTEXT" >&2; exit 2 ;;
 esac
+select_context_components "$SELECTED_CONTEXT"
+CONFIG="$COMPONENT_ROOT/semantic-router/router-config.yaml"
+MANIFESTS="$COMPONENT_ROOT/semantic-router"
+LLMD_MANIFESTS="$COMPONENT_ROOT/llm-d"
 
 context_selected() {
   [[ "$SELECTED_CONTEXT" == "$1" ]]
@@ -101,9 +104,9 @@ if $DELETE; then
     if [[ "$ctx" == "$ENVOY_CTX" ]]; then
       if kubectl --context "$ctx" -n ai-demo get httproute kserve-mock \
         -o 'jsonpath={.spec.rules[*].name}' | grep -qw model-kimi-k3; then
-        kubectl --context "$ctx" apply -f "$ROOT/llm-d/manifests/envoy-chat-extproc-pools.yaml"
+        kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-chat-extproc-pools.yaml"
       else
-        kubectl --context "$ctx" apply -f "$ROOT/llm-d/manifests/envoy-chat-extproc.yaml"
+        kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-chat-extproc.yaml"
       fi
     fi
     kubectl --context "$ctx" delete -f "$MANIFESTS/semantic-router.yaml" --ignore-not-found

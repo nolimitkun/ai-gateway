@@ -599,8 +599,10 @@ fixture route. This is a tested limitation, not an implied STT pool claim.
 
 ### Production vLLM
 
-`kserve/production/` replaces the combined fixture with one independently
-scalable vLLM `LLMInferenceService` per model and task:
+Each gateway-local `deploy/kserve/production/` directory contains the same
+replacement for the combined fixture: one independently scalable vLLM
+`LLMInferenceService` per model and task. The top-level `kserve/production/`
+keeps the same package available to arbitrary external GPU contexts.
 
 | Public endpoint | Hugging Face model | Served name | API | Reference GPU |
 |---|---|---|---|---|
@@ -767,12 +769,14 @@ working with the client's original model.
 
 ### Decisions are keyword rules, not the classifier
 
-[semantic-router/config/router-config.yaml](semantic-router/config/router-config.yaml)
+[the gateway-local router configuration](kuadrant/deploy/semantic-router/router-config.yaml)
 matches decisions with keyword rules, which are regular expressions evaluated
 in-process. That is a deliberate fixture choice with two consequences: the
 router downloads no model weights, so the pod requests 256 MiB and starts
 without waiting on HuggingFace, and the same prompt yields the same decision on
-every run — which is what makes the comparison row meaningful.
+every run — which is what makes the comparison row meaningful. The same file is
+repeated under all three gateway deployment trees, and validation requires the
+copies to remain byte-identical.
 
 Real intent classification uses `domain` conditions instead, backed by the MoM
 classifier models the router fetches from HuggingFace at startup. That profile
@@ -907,23 +911,39 @@ The core desired state is `LLMInferenceService/kserve-mock` with two replicas,
 `model.name: mock-kserve`, `HTTPRoute/kserve-mock`, and a scheduler-managed
 `InferencePool`.
 
-### KServe resource map
+### Gateway-local deployment maps
 
-The KServe directory is organized as follows:
+All Kubernetes component YAML is organized below the gateway that deploys it.
+The three trees deliberately repeat shared KServe, BBR, Keycloak, and semantic
+router resources so a complete cluster can be understood without following
+cross-directory imports:
 
-| Path | Purpose |
+- [Kuadrant deployment inventory](kuadrant/deploy/README.md)
+- [Envoy AI Gateway deployment inventory](envoy-ai-gateway/deploy/README.md)
+- [agentgateway deployment inventory](agentgateway/deploy/README.md)
+
+Each `<gateway>/deploy/` directory has the same component-level shape:
+
+| Relative path | Purpose |
 |---|---|
-| `kserve/manifests/llmisvc.yaml` | Two CPU mock replicas and the complete llm-d scheduler |
-| `kserve/manifests/route.yaml` | Base shared JSON-task and `/v1` fallback route |
-| `kserve/manifests/cpu-presets.yaml` | Prevents KServe GPU/vLLM presets from merging into the laptop fixture |
-| `kserve/manifests/envoy-inferencepool-rbac.yaml` | Allows Envoy Gateway to watch `InferencePool`; other stacks install equivalent RBAC |
-| `kserve/pools/` | Four mock `LLMInferenceService` pools plus the shared 12-model body-derived route |
-| `llm-d/manifests/` | Official BBR workload and the three gateway-specific ext_proc/TLS attachments |
-| `kserve/overlays/gpu/` | Placement and device requests for the mock pools; not a production runtime |
+| `cluster/kind.yaml` | One cluster's node image, port mapping, and resource configuration |
+| `gateway/` | Provider entry point and provider-specific control-plane resources |
+| `kserve/controller-values.yaml` | Prevent KServe from replacing gateway-owned API and inference-extension CRDs |
+| `kserve/base/` | CPU presets, shared route, base `LLMInferenceService`, and provider-specific Kustomization |
+| `kserve/pools/` | Four accelerator fixtures, shared 12-model route, and provider-specific TLS resources |
+| `kserve/gpu/` | Optional placement and device requests for the mock pools |
 | `kserve/production/` | Pinned vLLM runtime and four real task-specific services |
-| `kuadrant/kserve-overlay/` | Shared OpenShift-style Gateway references and trusted endpoint-picker certificate |
-| `kuadrant/pools-overlay/` | OpenShift-profile certificates and TLS policies for accelerator pools |
-| `kserve/values/kserve-llmisvc.values.yaml` | Prevents KServe from replacing gateway-owned API and inference-extension CRDs |
+| `llm-d/` | BBR workload and that gateway's ext_proc/TLS attachment |
+| `keycloak/` | Identity workload, route, and gateway-specific Kustomization |
+| `policies/` | Gateway-native authentication, authorization, limits, quota, token, and CORS resources |
+| `semantic-router/` | Optional workload, synchronized router config, and gateway-specific attachment |
+
+Scripts select exactly one of these roots from the requested cluster/context.
+`make validate` verifies schemas throughout all three trees and requires 18
+intentionally repeated shared manifests to remain byte-identical. Shared chart
+archives stay under the provider or `kserve/charts/`; the Keycloak realm JSON
+stays under `keycloak/realm/`. The top-level `kserve/production/` is retained as
+the compatibility entry point for arbitrary external GPU contexts.
 
 KServe reconciles the shared fixture into:
 
@@ -949,15 +969,14 @@ anchor.
 
 ```text
 .github/workflows/         offline checks and scheduled/manual live comparison
-clusters/                  kind cluster definitions
-kuadrant/                  OpenShift-style gateway, policies, overlays, and charts
-envoy-ai-gateway/          Envoy AI Gateway resources, policies, values, and charts
-agentgateway/              agentgateway resources, policies, values, and charts
-keycloak/                  shared realm, workload, and token route
-kserve/                    controller charts, fixture resources, pools, and production vLLM
-llm-d/                     body-based router and gateway-specific attachments
+kuadrant/deploy/            complete Kuadrant cluster component YAML
+envoy-ai-gateway/deploy/    complete Envoy AI Gateway cluster component YAML
+agentgateway/deploy/        complete agentgateway cluster component YAML
+*/charts/, */values/       provider chart archives and Helm values
+keycloak/realm/             shared realm data imported by each local Keycloak copy
+kserve/charts/              shared KServe and cert-manager chart archives
+kserve/production/          arbitrary-context production vLLM compatibility bundle
 mock-llm/                  deterministic multi-task CPU runtime and tests
-semantic-router/           vLLM Semantic Router workload, decisions, and ext_proc attachments
 scripts/                   installation, deployment, validation, and lifecycle commands
 compare/                   three-gateway comparison and raw results
 ```
