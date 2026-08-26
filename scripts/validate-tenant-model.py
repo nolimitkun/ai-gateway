@@ -16,9 +16,11 @@ So this validates the things the row assumes and cannot check for itself:
   * the caps in each stack's policy agree with the caps the harness classifies
     against, and with each other, or the two columns are not comparable;
   * the caps are far enough apart for the three outcomes to be distinguishable;
-  * `shared: true` is set on the Envoy tenant rules, which is the one setting
-    whose absence would double an org's real ceiling without any visible
-    symptom;
+  * `shared: true` is *not* set on the Envoy tenant rules while that policy
+    also carries a response-cost rule, because setting it silently disables
+    the token budget (see the policy comment for the measurement);
+  * no Kuadrant counter expression contains a double quote, which would make
+    Limitador reject the whole limit file and crash-loop;
   * the entitled team named in all three authorization policies is a team that
     exists and that the probe user belongs to.
 """
@@ -181,7 +183,12 @@ def main() -> int:
         if claim not in mappers:
             problems.append(f"the realm emits no '{claim}' claim, which the tenant policies read")
 
-    envoy_rules = tenant_rules(next(d for d in documents(ENVOY_LIMITS)))
+    envoy_policy = next(d for d in documents(ENVOY_LIMITS))
+    envoy_rules = tenant_rules(envoy_policy)
+    envoy_has_cost_rule = any(
+        "cost" in rule
+        for rule in envoy_policy["spec"]["rateLimit"]["global"]["rules"]
+    )
     for level, expected in (("org", org_cap), ("team", team_cap)):
         rule = envoy_rules.get(level)
         if rule is None:
@@ -192,11 +199,14 @@ def main() -> int:
             problems.append(
                 f"Envoy {level} cap is {actual} but the harness classifies against {expected}"
             )
-        if not rule.get("shared"):
+        if rule.get("shared") and envoy_has_cost_rule:
             problems.append(
-                f"Envoy {level} tenant rule needs 'shared: true': the policy targets the "
-                f"Gateway, so without it each route keeps its own counters and the {level} "
-                f"gets one budget per route"
+                f"Envoy {level} tenant rule must not set 'shared: true' while this policy "
+                f"also charges a response cost: the flag makes Envoy Gateway emit a second "
+                f"rate limit domain, the apply_on_stream_done call lands on the domain with "
+                f"no limits registered, and the token budget stops being enforced with no "
+                f"visible symptom. The per-route ceiling this trades away is reported by the "
+                f"tenant_route_scope comparison row"
             )
 
     kuadrant_limits = next(d for d in documents(KUADRANT_LIMITS))["spec"]["limits"]
@@ -216,6 +226,17 @@ def main() -> int:
             )
         if not limit.get("counters"):
             problems.append(f"Kuadrant '{name}' has no counters, so it is one bucket for every tenant")
+        for counter in limit.get("counters", []):
+            expression = counter.get("expression", "")
+            if '"' in expression:
+                problems.append(
+                    f"Kuadrant '{name}' counter {expression!r} contains a double quote: the "
+                    f"expression text is interpolated into a CEL string for Limitador's "
+                    f"variables, so the inner quotes end that string early, Limitador "
+                    f"rejects the entire limit file and crash-loops on a cold start -- "
+                    f"taking every limit in this policy with it while the RateLimitPolicy "
+                    f"still reports Enforced. Use single quotes"
+                )
 
     # The entitled team has to be named identically by all three authorization
     # policies and has to be a team the probe user is actually in, or the

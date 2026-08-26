@@ -45,14 +45,37 @@ spec:
     # Kuadrant 1.5.2's Istio Wasm integration does not surface Authorino's
     # identity metadata to the rate limit action in this topology. Counters
     # are CEL over Envoy's well-known attributes, and `request.headers` is one
-    # of them, so this is the plausible way around that -- but "plausible" is
-    # not "verified", and it is exactly the kind of claim that fails silently
-    # by sharing one bucket between every tenant.
+    # of them, so this looked like the way around that.
     #
-    # So the comparison probes it with two members of two teams in one org and
-    # reports which of the three outcomes actually happened: nested, shared,
-    # or unenforced. Do not promote this to a documented capability until that
-    # row says nested.
+    # A live run says it is not, and the comparison row reads "unenforced".
+    # Three keyings were measured against these limits:
+    #
+    #   auth.identity.org / .team    unenforced -- confirms the note above
+    #   the injected x-auth-org      unenforced -- Authorino adds these
+    #     / x-auth-team headers        toward the upstream, so they are not in
+    #                                  request.headers when the wasm rate
+    #                                  limit action evaluates; the descriptor
+    #                                  is absent and the limit is skipped
+    #   a client-supplied             ENFORCED at the cap -- and therefore
+    #     x-auth-org / x-auth-team      forgeable: exhausting a real bucket to
+    #                                   429 and resending the same token with
+    #                                   `x-auth-org: evil` returns 200
+    #
+    # The only keying that binds is the one a caller controls, which is not a
+    # tenancy control at all. That is what the tenant_header_spoof row reports
+    # for this stack. The limits are kept, unpromoted, because they are what
+    # the comparison measures; do not describe this as a capability unless the
+    # nesting row starts saying "nested".
+    #
+    # Quote these expressions with single quotes. Kuadrant interpolates the
+    # expression text into a CEL string for Limitador's `variables`, so
+    # request.headers["x"] becomes descriptors[0]["request.headers["x"]"],
+    # whose inner quotes end the string early. Limitador rejects the whole
+    # limit file over it -- not just this limit -- and crash-loops on a cold
+    # start, taking every rate limit in this policy with it, while the
+    # RateLimitPolicy still reports Enforced: True. Verified by reproducing
+    # the CrashLoopBackOff. scripts/validate-tenant-model.py rejects a double
+    # quote here so it cannot come back.
     tenant-org-probe:
       rates:
         - limit: 5
@@ -60,8 +83,8 @@ spec:
       when:
         - predicate: '"x-tenant-probe" in request.headers'
       counters:
-        - expression: request.headers["x-tenant-probe"]
-        - expression: request.headers["x-auth-org"]
+        - expression: request.headers['x-tenant-probe']
+        - expression: request.headers['x-auth-org']
     tenant-team-probe:
       rates:
         - limit: 3
@@ -69,6 +92,6 @@ spec:
       when:
         - predicate: '"x-tenant-probe" in request.headers'
       counters:
-        - expression: request.headers["x-tenant-probe"]
-        - expression: request.headers["x-auth-org"]
-        - expression: request.headers["x-auth-team"]
+        - expression: request.headers['x-tenant-probe']
+        - expression: request.headers['x-auth-org']
+        - expression: request.headers['x-auth-team']

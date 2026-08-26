@@ -69,24 +69,43 @@ spec:
         # their decisions. That intersection is what makes the levels nest:
         # whichever bucket empties first returns the 429.
         #
-        # `shared: true` is load-bearing, not decoration. This policy targets
-        # the Gateway, and each Route otherwise keeps its own counters. There
-        # are two inference routes (kserve-mock and the generated
-        # kserve-mock-ai), so without it an org would silently get one full
-        # budget per route -- twice the ceiling it was sold. The per-user rule
-        # below is left unshared: a user bucket splitting per route is
-        # survivable, and it keeps the contrast visible.
-        #
         # The team limit is deliberately over-subscribed against the org
         # limit: 2 teams x 3 does not fit in 5. The parent is the real cap,
         # and the child only stops one team from eating it alone.
+        #
+        # These rules deliberately do NOT set `shared: true`, and that costs
+        # something. This policy targets the Gateway and each Route keeps its
+        # own counters, so with two inference routes (kserve-mock and the
+        # generated kserve-mock-ai) a tenant gets one budget per route --
+        # twice the ceiling. `shared: true` is the setting that fixes exactly
+        # that, and it was set here until a live run showed what it costs
+        # instead.
+        #
+        # Setting it on any rule in this policy makes Envoy Gateway emit a
+        # second global rate limit filter with its own domain
+        # (ai-demo/ai-gateway/http alongside ai-demo/kserve-mock). Both
+        # filters sit at stage 0 and evaluate the same route-level actions,
+        # but the limit service registers every limit under one domain only.
+        # Request-phase limits survive that, because the decision is the OR of
+        # the two filters and the filter that owns the limits still rejects.
+        # The token budget below does not: it is charged with
+        # `apply_on_stream_done`, that call lands on the domain with no limits
+        # registered, and the budget silently stops being enforced. Measured
+        # on a live cluster: 8 requests x 57 tokens against a 100/minute cap,
+        # no 429, while the request-count rules above kept working.
+        #
+        # So the choice is a tenant ceiling that doubles across two routes, or
+        # a token budget that is quietly not enforced at all. The doubling is
+        # the one the comparison can see -- the tenant_route_scope row reports
+        # "SEPARATE bucket per route -- ceiling doubled" -- so it is the one
+        # taken here. scripts/validate-tenant-model.py holds the flag off for
+        # as long as this policy also carries a response-cost rule.
         - clientSelectors:
             - headers:
                 - name: x-tenant-probe
                   type: Distinct
                 - name: x-org-id
                   type: Distinct
-          shared: true
           limit:
             requests: 5
             unit: Hour
@@ -98,7 +117,6 @@ spec:
                   type: Distinct
                 - name: x-team-id
                   type: Distinct
-          shared: true
           limit:
             requests: 3
             unit: Hour
