@@ -4,7 +4,18 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ctx="${1:?usage: deploy-kserve.sh <kubectl-context>}"
+BBR_MANIFESTS="$ROOT/llm-d/manifests"
 case "$ctx" in kind-ai-gw-kuadrant|kind-ai-gw-envoy|kind-ai-gw-agent) ;; *) echo "unsupported context: $ctx" >&2; exit 2 ;; esac
+pools_present=false
+if kubectl --context "$ctx" -n ai-demo get llminferenceservice kserve-b300 >/dev/null 2>&1; then
+  pools_present=true
+fi
+
+# A retained Kind node can report Ready before the KServe controller has
+# reacquired its lease and opened the admission webhook. Applying an LLMI in
+# that window fails with connection refused, so gate every reconcile here.
+kubectl --context "$ctx" -n kserve rollout status \
+  deployment/llmisvc-controller-manager --timeout=5m
 
 wait_for_route_accepted() {
   local ctx="$1" deadline=$((SECONDS + 180)) accepted
@@ -36,18 +47,96 @@ wait_for_deployment() {
   return 1
 }
 
+wait_for_policy() {
+  local ctx="$1" object="$2" deadline=$((SECONDS + 180))
+  while ((SECONDS < deadline)); do
+    if kubectl --context "$ctx" -n ai-demo get "$object" -o json 2>/dev/null |
+      python3 -c '
+import json, sys
+status = json.load(sys.stdin).get("status", {})
+conditions = list(status.get("conditions", []))
+for key in ("ancestors", "parents"):
+    for parent in status.get(key, []):
+        conditions.extend(parent.get("conditions", []))
+raise SystemExit(0 if any(
+    item.get("type") == "Accepted" and item.get("status") == "True"
+    for item in conditions
+) else 1)
+'; then
+      echo "$object Accepted"
+      return 0
+    fi
+    sleep 3
+  done
+  kubectl --context "$ctx" -n ai-demo get "$object" -o yaml >&2
+  return 1
+}
+
 echo "==> KServe LLMInferenceService resources in $ctx"
 if [[ "$ctx" == "kind-ai-gw-kuadrant" ]]; then
-  kubectl --context "$ctx" apply -k "$ROOT/kuadrant/kserve-overlay"
+  if $pools_present; then
+    kubectl --context "$ctx" apply -k "$ROOT/kuadrant/pools-overlay"
+  else
+    kubectl --context "$ctx" apply -k "$ROOT/kuadrant/kserve-overlay"
+  fi
   kubectl --context "$ctx" -n ai-demo wait certificate/kserve-mock-epp-root-ca \
     --for=condition=Ready --timeout=3m
   kubectl --context "$ctx" -n ai-demo wait certificate/kserve-mock-epp-server \
     --for=condition=Ready --timeout=3m
 else
   kubectl --context "$ctx" apply -f "$ROOT/kserve/manifests/cpu-presets.yaml"
-  kubectl --context "$ctx" apply -f "$ROOT/kserve/manifests/route.yaml"
+  if $pools_present; then
+    kubectl --context "$ctx" apply -f "$ROOT/kserve/pools/route.yaml"
+  else
+    kubectl --context "$ctx" apply -f "$ROOT/kserve/manifests/route.yaml"
+  fi
   kubectl --context "$ctx" apply -f "$ROOT/kserve/manifests/llmisvc.yaml"
 fi
+
+echo "==> OpenAI body.model routing in $ctx"
+kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/body-based-router.yaml"
+wait_for_deployment "$ctx" body-based-router
+case "$ctx" in
+  kind-ai-gw-kuadrant)
+    kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/kuadrant-extproc.yaml"
+    ;;
+  kind-ai-gw-envoy)
+    kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-backend.yaml"
+    # Migration from the former standalone semantic-router policy. It targets
+    # the same chat section and Envoy Gateway correctly marks both policies
+    # conflicted if the old object is left behind.
+    kubectl --context "$ctx" -n ai-demo delete \
+      envoyextensionpolicy/semantic-router --ignore-not-found
+    # Preserve the optional semantic-router chain during an idempotent KServe
+    # reconcile; otherwise install the normal explicit-model chat processor.
+    if kubectl --context "$ctx" -n ai-demo get deployment semantic-router >/dev/null 2>&1; then
+      if $pools_present; then
+        kubectl --context "$ctx" apply -f "$ROOT/semantic-router/manifests/envoy-extproc-pools.yaml"
+      else
+        kubectl --context "$ctx" apply -f "$ROOT/semantic-router/manifests/envoy-extproc.yaml"
+      fi
+    else
+      if $pools_present; then
+        kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-chat-extproc-pools.yaml"
+      else
+        kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-chat-extproc.yaml"
+      fi
+    fi
+    if $pools_present; then
+      kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-task-extproc-pools.yaml"
+    else
+      kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-task-extproc.yaml"
+    fi
+    wait_for_policy "$ctx" envoyextensionpolicy/model-body-router-chat
+    wait_for_policy "$ctx" envoyextensionpolicy/model-body-router-tasks
+    ;;
+  kind-ai-gw-agent)
+    kubectl --context "$ctx" -n ai-demo delete \
+      agentgatewaypolicy/body-based-router-tls --ignore-not-found
+    kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/agentgateway-extproc.yaml"
+    wait_for_policy "$ctx" agentgatewaypolicy/model-body-router
+    ;;
+esac
 wait_for_deployment "$ctx" kserve-mock-kserve
 wait_for_deployment "$ctx" kserve-mock-kserve-router-scheduler
 wait_for_route_accepted "$ctx"

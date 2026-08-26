@@ -1,0 +1,26 @@
+# Pool-enabled JSON task variant. Multipart STT and model catalog GETs remain
+# outside BBR because BBR v1.2.1 parses JSON request bodies only.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: model-body-router-tasks
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: embeddings}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: rerank}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-qwen3-embedding-8b}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-e5-mistral-7b-instruct}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-bge-m3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-jina-embeddings-v3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-nomic-embed-text-v2-moe}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-bge-reranker-v2-m3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-jina-reranker-v2-base-multilingual}
+  extProc:
+    - backendRefs:
+        - {group: gateway.envoyproxy.io, kind: Backend, name: body-based-router}
+      failOpen: false
+      messageTimeout: 10s
+      processingMode:
+        request: {body: Buffered}
+        response: {}

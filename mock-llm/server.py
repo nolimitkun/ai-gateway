@@ -530,7 +530,7 @@ class Handler(BaseHTTPRequestHandler):
             "x-auth-user",
             "x-auth-plan",
             "x-user-id",
-            "x-model-class",
+            "x-gateway-model-name",
         }
         return {
             name.lower(): value

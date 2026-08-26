@@ -305,7 +305,7 @@ class RuntimeTest(unittest.TestCase):
             {
                 "x-selected-model": "kimi-k3",
                 "x-vsr-skip-processing": "false",
-                "x-model-class": "b300",
+                "x-gateway-model-name": "kimi-k3",
             },
         )
         self.assertEqual(status, 200)
@@ -315,7 +315,10 @@ class RuntimeTest(unittest.TestCase):
             payload["mock_routing_headers"],
             {"x-selected-model": "kimi-k3", "x-vsr-skip-processing": "false"},
         )
-        self.assertEqual(payload["mock_gateway_headers"], {"x-model-class": "b300"})
+        self.assertEqual(
+            payload["mock_gateway_headers"],
+            {"x-gateway-model-name": "kimi-k3"},
+        )
 
     def test_only_allowlisted_gateway_evidence_headers_are_echoed(self):
         status, payload = self.post_json_with_headers(

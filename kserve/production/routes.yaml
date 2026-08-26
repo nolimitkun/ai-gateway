@@ -7,8 +7,8 @@ spec:
   parentRefs: [{name: ai-gateway}]
   rules:
     - matches:
-        - path: {type: PathPrefix, value: /v1}
-          headers: [{name: x-model-service, value: chat}]
+        - path: {type: Exact, value: /v1/chat/completions}
+        - path: {type: PathPrefix, value: /v1/models}
       backendRefs:
         - group: inference.networking.k8s.io
           kind: InferencePool
@@ -24,8 +24,7 @@ spec:
   parentRefs: [{name: ai-gateway}]
   rules:
     - matches:
-        - path: {type: PathPrefix, value: /v1}
-          headers: [{name: x-model-service, value: embedding}]
+        - path: {type: Exact, value: /v1/embeddings}
       backendRefs:
         - group: inference.networking.k8s.io
           kind: InferencePool
@@ -41,8 +40,9 @@ spec:
   parentRefs: [{name: ai-gateway}]
   rules:
     - matches:
-        - path: {type: PathPrefix, value: /v1}
-          headers: [{name: x-model-service, value: rerank}]
+        - path: {type: Exact, value: /rerank}
+        - path: {type: Exact, value: /v1/rerank}
+        - path: {type: Exact, value: /v2/rerank}
       backendRefs:
         - group: inference.networking.k8s.io
           kind: InferencePool
@@ -58,8 +58,7 @@ spec:
   parentRefs: [{name: ai-gateway}]
   rules:
     - matches:
-        - path: {type: PathPrefix, value: /v1}
-          headers: [{name: x-model-service, value: transcription}]
+        - path: {type: Exact, value: /v1/audio/transcriptions}
       backendRefs:
         - group: inference.networking.k8s.io
           kind: InferencePool

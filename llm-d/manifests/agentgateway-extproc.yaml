@@ -1,0 +1,56 @@
+# Run BBR before agentgateway chooses an HTTPRoute rule. The generated
+# X-Gateway-Model-Name header is therefore available to the normal Gateway API
+# matcher and is never required from the public client. A native backend is
+# used because traffic.extProc does not merge Service-targeted TLS policies
+# into its direct backend reference in agentgateway v1.4.1.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: body-based-router
+  namespace: ai-demo
+spec:
+  static:
+    host: body-based-router.ai-demo.svc.cluster.local
+    port: 9004
+  policies:
+    http:
+      version: HTTP2
+    # BBR v1.2.1 generates a new self-signed certificate on each start. This
+    # local fixture must therefore originate TLS without CA verification.
+    tls:
+      alpnProtocols:
+        - h2
+      insecureSkipVerify: All
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: model-body-router
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  traffic:
+    phase: PreRouting
+    extProc:
+      conditional:
+        - condition: >-
+            request.path == "/v1/chat/completions" ||
+            request.path == "/v1/embeddings" ||
+            request.path == "/v1/rerank"
+          policy:
+            backendRef:
+              group: agentgateway.dev
+              kind: AgentgatewayBackend
+              name: body-based-router
+              namespace: ai-demo
+            failureMode: FailClosed
+            processingOptions:
+              requestHeaderMode: Send
+              requestBodyMode: Buffered
+              responseHeaderMode: Skip
+              responseBodyMode: None
+              requestTrailerMode: Skip
+              responseTrailerMode: Skip

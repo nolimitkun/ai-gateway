@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - PyYAML ships with the tooling
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "semantic-router" / "config" / "router-config.yaml"
 COMPARISON = ROOT / "compare" / "run-gateway.py"
+POOL_ROUTE = ROOT / "kserve" / "pools" / "route.yaml"
 
 sys.path.insert(0, str(ROOT / "mock-llm"))
 from server import CATALOG  # noqa: E402
@@ -177,12 +178,56 @@ def main():
             "cannot show a decision being made"
         )
 
+    # BBR turns the public OpenAI body.model field into the internal
+    # X-Gateway-Model-Name match. Validate that every non-CPU JSON model lands
+    # on the pool associated with its catalog accelerator, and that the
+    # obsolete public x-model-class contract cannot creep back into the route.
+    pool_route = yaml.safe_load(POOL_ROUTE.read_text(encoding="utf-8"))
+    actual_pool_routes = {}
+    for rule in pool_route["spec"]["rules"]:
+        if not rule["name"].startswith("model-"):
+            continue
+        match = rule["matches"][0]
+        headers = match.get("headers", [])
+        if len(headers) != 1 or headers[0].get("name", "").lower() != "x-gateway-model-name":
+            problems.append(f"pool rule '{rule['name']}' does not match the internal BBR model header")
+            continue
+        model = headers[0]["value"]
+        actual_pool_routes[model] = rule["backendRefs"][0]["name"]
+
+    expected_pool_routes = {
+        entry["id"]: f"kserve-{entry['accelerator']}-inference-pool"
+        for entry in CATALOG
+        if entry["accelerator"] != "cpu" and entry["task"] != "transcription"
+    }
+    if actual_pool_routes != expected_pool_routes:
+        missing = sorted(expected_pool_routes.keys() - actual_pool_routes.keys())
+        extra = sorted(actual_pool_routes.keys() - expected_pool_routes.keys())
+        wrong = sorted(
+            model for model in expected_pool_routes.keys() & actual_pool_routes.keys()
+            if expected_pool_routes[model] != actual_pool_routes[model]
+        )
+        if missing:
+            problems.append(f"pool route is missing body.model mappings: {', '.join(missing)}")
+        if extra:
+            problems.append(f"pool route has unknown body.model mappings: {', '.join(extra)}")
+        for model in wrong:
+            problems.append(
+                f"body.model '{model}' routes to '{actual_pool_routes[model]}', "
+                f"expected '{expected_pool_routes[model]}'"
+            )
+
+    route_text = POOL_ROUTE.read_text(encoding="utf-8").lower()
+    if "x-model-class" in route_text:
+        problems.append("pool route still exposes the obsolete x-model-class contract")
+
     for problem in problems:
         print(problem, file=sys.stderr)
     for prompt, model in selected.items():
         print(f"{prompt!r} -> {model}")
-    print(f"{len(declared)} routable models, {len(decisions)} decisions, "
-          f"{len(selected)} comparison prompts, {len(problems)} problems")
+    print(f"{len(declared)} semantic models, {len(actual_pool_routes)} body.model routes, "
+          f"{len(decisions)} decisions, {len(selected)} comparison prompts, "
+          f"{len(problems)} problems")
     return 1 if problems else 0
 
 

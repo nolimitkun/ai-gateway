@@ -1,0 +1,165 @@
+# Istio has no Gateway API policy for BBR, so the OpenShift profile installs
+# the official processor as a raw Envoy filter. It is inserted immediately
+# before KServe's canonical EPP ext_proc filter. The optional semantic router
+# uses a distinct filter inserted earlier, producing this order:
+# semantic model choice -> BBR model header -> llm-d endpoint choice.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: model-body-router
+  namespace: openshift-ingress
+spec:
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: openshift-ai-inference
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.ext_proc
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: ai.gateway.body_based_router
+          typed_config:
+            '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            failure_mode_allow: false
+            message_timeout: 10s
+            processing_mode:
+              request_header_mode: SEND
+              response_header_mode: SKIP
+              request_body_mode: BUFFERED
+              response_body_mode: NONE
+              request_trailer_mode: SKIP
+              response_trailer_mode: SKIP
+            grpc_service:
+              envoy_grpc:
+                cluster_name: outbound|9004||body-based-router.ai-demo.svc.cluster.local
+              timeout: 10s
+    - applyTo: VIRTUAL_HOST
+      match:
+        context: GATEWAY
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            ai.gateway.body_based_router:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: chat
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            ai.gateway.body_based_router:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              overrides: &bbr_route_overrides
+                processing_mode:
+                  request_header_mode: SEND
+                  response_header_mode: SKIP
+                  request_body_mode: BUFFERED
+                  response_body_mode: NONE
+                  request_trailer_mode: SKIP
+                  response_trailer_mode: SKIP
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: outbound|9004||body-based-router.ai-demo.svc.cluster.local
+                  timeout: 10s
+                failure_mode_allow: false
+    # EnvoyFilter route names are exact matches, so every internal model rule
+    # is listed. This makes BBR overwrite a client-forged routing header even
+    # when that header affected Envoy's initial route selection.
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-kimi-k3}}}}
+      patch: &bbr_route_patch
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            ai.gateway.body_based_router:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              overrides: *bbr_route_overrides
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-glm-5-3}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-deepseek-v4-pro}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-deepseek-v4-flash}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-qwen3-8-27b}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-qwen3-embedding-8b}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-e5-mistral-7b-instruct}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-bge-m3}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-jina-embeddings-v3}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-nomic-embed-text-v2-moe}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-bge-reranker-v2-m3}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-jina-reranker-v2-base-multilingual}}}}
+      patch: *bbr_route_patch
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: embeddings
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            ai.gateway.body_based_router:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              overrides: *bbr_route_overrides
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: rerank
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            ai.gateway.body_based_router:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              overrides: *bbr_route_overrides
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: body-based-router
+  namespace: ai-demo
+spec:
+  host: body-based-router.ai-demo.svc.cluster.local
+  trafficPolicy:
+    tls:
+      # BBR v1.2.1 generates an ephemeral self-signed certificate on startup.
+      mode: SIMPLE
+      insecureSkipVerify: true

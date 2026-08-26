@@ -1,0 +1,29 @@
+# JSON task bodies use the same official BBR as chat. Model catalog GETs and
+# multipart transcription requests deliberately bypass it: BBR v1.2.1 parses
+# JSON bodies only.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: model-body-router-tasks
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+      sectionName: embeddings
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock
+      sectionName: rerank
+  extProc:
+    - backendRefs:
+        - group: gateway.envoyproxy.io
+          kind: Backend
+          name: body-based-router
+      failOpen: false
+      messageTimeout: 10s
+      processingMode:
+        request:
+          body: Buffered
+        response: {}

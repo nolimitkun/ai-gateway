@@ -1,0 +1,23 @@
+# Pool-enabled variant: BBR must run on the base chat rule and every internal
+# model rule so a forged X-Gateway-Model-Name header is always overwritten.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: model-body-router-chat
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: chat}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-kimi-k3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-glm-5-3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-deepseek-v4-pro}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-deepseek-v4-flash}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-qwen3-8-27b}
+  extProc:
+    - backendRefs:
+        - {group: gateway.envoyproxy.io, kind: Backend, name: body-based-router}
+      failOpen: false
+      messageTimeout: 10s
+      processingMode:
+        request: {body: Buffered}
+        response: {}

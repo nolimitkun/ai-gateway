@@ -1,0 +1,31 @@
+# Pool-enabled Envoy chain: semantic choice first, then BBR's trusted internal
+# model header. All chat sections participate to prevent header-based bypass.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: model-body-router-chat
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: chat}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-kimi-k3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-glm-5-3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-deepseek-v4-pro}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-deepseek-v4-flash}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-qwen3-8-27b}
+  extProc:
+    - backendRefs:
+        - {name: semantic-router, port: 50051}
+      failOpen: true
+      messageTimeout: 10s
+      processingMode:
+        allowModeOverride: true
+        request: {body: Buffered}
+        response: {}
+    - backendRefs:
+        - {group: gateway.envoyproxy.io, kind: Backend, name: body-based-router}
+      failOpen: false
+      messageTimeout: 10s
+      processingMode:
+        request: {body: Buffered}
+        response: {}

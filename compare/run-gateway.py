@@ -30,7 +30,9 @@ CONFIG = {
         "gateway": "ai-gateway", "gateway_ns": "ai-demo",
         "policy_condition": "Accepted",
         "policies": ["securitypolicy/kserve-mock", "backendtrafficpolicy/kserve-mock", "aigatewayroute/kserve-mock-ai"],
-        "router": ("ai-demo", "envoyextensionpolicy/semantic-router", "Accepted"),
+        # Envoy's semantic processor and BBR share one ordered policy object;
+        # the deployment distinguishes that chain from the BBR-only variant.
+        "router": ("ai-demo", "envoyextensionpolicy/model-body-router-chat", "Accepted"),
     },
     "ai-gw-agent": {
         "context": "kind-ai-gw-agent", "base": "http://localhost:8081",
@@ -225,6 +227,10 @@ def policy_summary(cfg: dict) -> tuple[bool, str]:
 
 def router_summary(cfg: dict) -> tuple[bool, str]:
     namespace, object_name, condition = cfg["router"]
+    if cfg["context"] == "kind-ai-gw-envoy" and not kube_json(
+        cfg, "ai-demo", "deployment/semantic-router"
+    ):
+        return False, "Absent"
     obj = kube_json(cfg, namespace, object_name)
     if not obj:
         return False, "Absent"
@@ -295,7 +301,13 @@ def run(cluster: str, sample_count: int) -> dict:
     result["llmisvc_ready"] = "Yes" if has_condition(llmisvc, "Ready") else "No"
     result["route_ready"] = f"{'Yes' if has_condition(route, 'Accepted') else 'No'} / {'Yes' if has_condition(route, 'ResolvedRefs') else 'No'}"
     route_names = [rule.get("name") for rule in route.get("spec", {}).get("rules", [])]
-    result["route_rules"] = "chat Exact + /v1 prefix" if route_names == ["chat", "inference"] else "Unexpected"
+    base_rules = ["chat", "embeddings", "rerank", "inference"]
+    model_rule_count = sum(str(name).startswith("model-") for name in route_names)
+    result["route_rules"] = (
+        f"body.model + {model_rule_count} pool rules"
+        if model_rule_count and route_names[-4:] == base_rules
+        else ("3 JSON tasks + /v1 fallback" if route_names == base_rules else "Unexpected")
+    )
 
     deployment = kube_json(cfg, "ai-demo", "deployment/kserve-mock-kserve")
     result["workload_replicas"] = f"{deployment.get('status', {}).get('readyReplicas', 0)}/{deployment.get('spec', {}).get('replicas', 0)}"
@@ -321,6 +333,39 @@ def run(cluster: str, sample_count: int) -> dict:
             pods.add(pod)
     result["routing_sample"] = f"{sample_count}/{sample_count} HTTP 200, {len(pods)} pods" if ok == sample_count else f"{ok}/{sample_count} HTTP 200, {len(pods)} pods"
     result["chat_p50"] = f"{round(statistics.median(latencies))} ms" if latencies else "n/a"
+
+    pool_names = {
+        item.get("metadata", {}).get("name")
+        for item in owned.get("items", [])
+        if item.get("kind") == "InferencePool"
+    }
+    if "kserve-b300-inference-pool" in pool_names:
+        body_routes = []
+        for path, payload, accelerator in (
+            ("/v1/chat/completions", {"model": "kimi-k3", "messages": CHAT["messages"]}, "b300"),
+            ("/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": CHAT["messages"]}, "h200"),
+            ("/v1/chat/completions", {"model": "qwen3.8-27b", "messages": CHAT["messages"]}, "h100"),
+            ("/v1/embeddings", {"model": "bge-m3", "input": "gateway inference"}, "l40s"),
+        ):
+            route_code, route_body, _ = json_call(cfg, path, access_token, payload)
+            body_routes.append(
+                route_code == 200
+                and route_body.get("mock_accelerator") == accelerator
+            )
+        spoof_code, spoof_body, _ = json_call(
+            cfg,
+            "/v1/chat/completions",
+            access_token,
+            {"model": "kimi-k3", "messages": CHAT["messages"]},
+            {"x-gateway-model-name": "qwen3.8-27b"},
+        )
+        spoof_safe = (
+            spoof_code == 200
+            and spoof_body.get("mock_accelerator") == "b300"
+        )
+        result["model_body_routing"] = "4/4 pools; client header overwritten" if all(body_routes) and spoof_safe else "Failed"
+    else:
+        result["model_body_routing"] = "Pools not installed"
 
     stream_payload = dict(CHAT, stream=True, stream_options={"include_usage": True})
     code, raw, _ = request(cfg["base"] + "/v1/chat/completions", method="POST", headers=auth_headers(access_token), json_body=stream_payload)
@@ -385,6 +430,7 @@ def run(cluster: str, sample_count: int) -> dict:
     if router_present:
         selected = []
         upstream = []
+        auto_pools = []
         decisions = []
         system_prompts = 0
         auto_latencies = []
@@ -395,6 +441,7 @@ def run(cluster: str, sample_count: int) -> dict:
             selected.append(body.get("model", "error") if code == 200 else f"HTTP {code}")
             routing_headers = body.get("mock_routing_headers", {})
             upstream.append(routing_headers.get("x-selected-model", "no header"))
+            auto_pools.append(body.get("mock_accelerator", "unknown") if code == 200 else f"HTTP {code}")
             system_prompts += int(bool(body.get("mock_system_prompt")))
             decisions.append(
                 response_headers.get("x-vsr-selected-decision")
@@ -403,11 +450,12 @@ def run(cluster: str, sample_count: int) -> dict:
             )
         result["auto_models"] = " / ".join(selected)
         result["auto_upstream"] = f"{' / '.join(upstream)}; system prompt {system_prompts}/{len(AUTO_PROMPTS)}"
+        result["auto_pools"] = " / ".join(auto_pools)
         result["auto_decision"] = " / ".join(decisions)
         result["auto_p50"] = f"{round(statistics.median(auto_latencies))} ms"
         result["router_fail_open"] = probe_router_fail_open(cfg, access_token)
     else:
-        for key in ("auto_models", "auto_upstream", "auto_decision", "auto_p50", "router_fail_open"):
+        for key in ("auto_models", "auto_upstream", "auto_pools", "auto_decision", "auto_p50", "router_fail_open"):
             result[key] = "No router"
 
     result["token_issuance"] = "Yes" if access_token else "No"
@@ -436,8 +484,8 @@ def run(cluster: str, sample_count: int) -> dict:
             result["identity_headers"] = f"Unexpected: {identity_headers}"
         mallory, bob = token(cfg, "mallory"), token(cfg, "bob")
         guest, _, _ = json_call(cfg, "/v1/chat/completions", mallory, CHAT)
-        restricted, _, _ = json_call(cfg, "/v1/chat/completions", bob, BIG_CHAT, {"x-model-class": "b300"})
-        allowed, _, _ = json_call(cfg, "/v1/chat/completions", access_token, BIG_CHAT, {"x-model-class": "b300"})
+        restricted, _, _ = json_call(cfg, "/v1/chat/completions", bob, BIG_CHAT)
+        allowed, _, _ = json_call(cfg, "/v1/chat/completions", access_token, BIG_CHAT)
         result["authorization"] = f"{guest} / {restricted} / {allowed}"
         result["request_limit"] = probe_limit(cfg, access_token, ("x-rate-limit-probe", "true"), 8)
         bob_rate, _, _ = json_call(cfg, "/v1/chat/completions", bob, CHAT, {"x-rate-limit-probe": "true"})

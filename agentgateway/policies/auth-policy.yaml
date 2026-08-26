@@ -31,6 +31,9 @@ spec:
                 name: keycloak
                 port: 8080
               jwksPath: /realms/ai-gateway/protocol/openid-connect/certs
+              # v1.4.1 requires at least five minutes. The installer avoids
+              # restarting unchanged ephemeral Keycloak realms, so its signing
+              # key stays stable across normal idempotent policy reconciles.
               cacheDuration: 5m
 ---
 # Every caller must be a member of model-users. `Require` rules are cumulative,
@@ -52,7 +55,9 @@ spec:
         matchExpressions:
           - 'jwt.groups.exists(g, g == "model-users")'
 ---
-# The B300 pool is admin-only. Written as a Require rule rather than a Deny
+# The B300 model set is admin-only. BBR derives X-Gateway-Model-Name from the
+# request body before authorization; clients do not select accelerator classes.
+# Written as a Require rule rather than a Deny
 # rule: a Deny whose expression errors fails open, and the membership test on
 # a missing header would error.
 apiVersion: agentgateway.dev/v1alpha1
@@ -70,4 +75,4 @@ spec:
       action: Require
       policy:
         matchExpressions:
-          - '!("x-model-class" in request.headers) || request.headers["x-model-class"] != "b300" || jwt.groups.exists(g, g == "platform-admins")'
+          - '!("x-gateway-model-name" in request.headers) || !(request.headers["x-gateway-model-name"] in ["kimi-k3", "glm-5.3", "deepseek-v4-pro"]) || jwt.groups.exists(g, g == "platform-admins")'

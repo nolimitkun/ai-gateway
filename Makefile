@@ -178,7 +178,7 @@ vllm-production-down: ## remove production vLLM services from VLLM_CONTEXT
 vllm-validate: ## validate production vLLM APIs (set VLLM_BASE_URL)
 	@test -n "$(VLLM_BASE_URL)" || { echo 'set VLLM_BASE_URL to the Gateway URL' >&2; exit 2; }
 	$(PYTHON) scripts/validate-vllm-contract.py --base-url "$(VLLM_BASE_URL)" \
-	  --routing-header x-model-service --chat-model qwen3-8b \
+	  --chat-model qwen3-8b \
 	  --embedding-model qwen3-embedding-8b \
 	  --rerank-model bge-reranker-v2-m3 \
 	  --transcription-model whisper-large-v3-turbo
