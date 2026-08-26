@@ -317,7 +317,7 @@ flowchart TB
   subgraph K["ai-gw-kuadrant · Kubernetes 1.36.1"]
     subgraph OI["openshift-ingress"]
       GW["Gateway/openshift-ai-inference<br/>Istio-managed Envoy proxy"]
-      EF["EnvoyFilter/semantic-router<br/>chat rule only"] -. programs .-> GW
+      EF["EnvoyFilter/semantic-router<br/>all chat sections"] -. programs .-> GW
       BF["EnvoyFilter/model-body-router<br/>JSON task rules"] -. programs .-> GW
     end
     subgraph KSYS["istio-system + kuadrant-system"]
@@ -360,7 +360,7 @@ flowchart TB
 | Security | Keycloak JWT, group/B300 authorization through `AuthPolicy` and Authorino |
 | Limits | Limitador-backed request, quota, and response `usage.total_tokens` accounting; fixture probe buckets are shared |
 | Model-to-pool routing | Raw Istio `EnvoyFilter` runs BBR only on named JSON task/model rules; a TLS `DestinationRule` handles BBR's runtime self-signed certificate |
-| Semantic routing | A preceding raw `EnvoyFilter` selects the model; BBR then recomputes the route, so `auto` reaches B300/H200/H100 |
+| Semantic routing | A preceding raw `EnvoyFilter` covers the base chat rule and all five model-specific chat rules; BBR then recomputes the route, so `auto` reaches B300/H200/H100 even when a client forges the internal model header |
 | KServe connection | body-derived route rule → `InferencePool` → TLS-protected EPP → model pods |
 | Deep live evidence | 30-request routing sample; four body-routed pools; five APIs; JWT/authz/identity; shared rate/quota; token budget; ext_proc scope/fail-open; EPP TLS |
 | Not provided in this profile | Native Kuadrant CORS or ext_proc policy; CORS probe returns HTTP 405 |
@@ -747,9 +747,13 @@ curl "$BASE/v1/chat/completions" -H 'content-type: application/json' \
 
 Pool routing adds a second external processor. On Kuadrant and Envoy it runs
 after semantic selection, so `model:auto` is converted to the selected model
-and then reaches that model's pool. agentgateway 1.4.1 runs gateway-scoped BBR
-in `PreRouting` before the route-scoped semantic processor; explicit models
-still route correctly, while `auto` remains on the shared pool. The live table
+and then reaches that model's pool. Because Envoy chooses an initial route
+before either processor runs, both attachments enable semantic processing on
+the base chat section and every model-specific chat section. The comparison
+also sends `model:auto` with a contradictory internal header and requires the
+semantic decision to win. agentgateway 1.4.1 runs gateway-scoped BBR in
+`PreRouting` before the route-scoped semantic processor; explicit models still
+route correctly, while `auto` remains on the shared pool. The live table
 records this as `b300/h200/h100` versus `all/all/all`.
 
 The OpenShift profile is the outlier: Kuadrant has no external-processing
@@ -847,8 +851,9 @@ check rather than quietly reporting the default as a routing decision.
 `make compare CLUSTER=<name>` adds live-cluster assertions to that gateway's
 saved result:
 
-- Gateway Programmed, both named route rules, Accepted/ResolvedRefs conditions,
-  KServe readiness/ownership, endpoint-picker transport, and both model pods;
+- Gateway Programmed, the expanded body-model route rules,
+  Accepted/ResolvedRefs conditions, KServe readiness/ownership,
+  endpoint-picker transport, and both model pods;
 - model catalog, tier-correct routing, streaming usage and `[DONE]`, embeddings
   including reduced/fixed dimensions, reranking, transcription, and
   diarization capability rejection;
@@ -860,8 +865,9 @@ saved result:
   isolation, quota, token budget, and approved/unapproved CORS origins;
 - ext_proc attachment, the model chosen for each of three prompts, the model and
   system prompt the runtime received, the decision headers returned to the
-  client, non-chat bypass, controlled router failure/restoration, and
-  auto-routed p50 latency when the optional semantic routing layer is installed.
+  client, non-chat bypass, a forged-header `model:auto` request, controlled
+  router failure/restoration, and auto-routed p50 latency when the optional
+  semantic routing layer is installed.
 
 Each run creates a separate ignored JSON result. `make comparison-summary`
 merges all three into the marked README table. Offline schema validation cannot
