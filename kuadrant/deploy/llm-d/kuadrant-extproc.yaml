@@ -117,10 +117,7 @@ spec:
       match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-nomic-embed-text-v2-moe}}}}
       patch: *bbr_route_patch
     - applyTo: HTTP_ROUTE
-      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-bge-reranker-v2-m3}}}}
-      patch: *bbr_route_patch
-    - applyTo: HTTP_ROUTE
-      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-jina-reranker-v2-base-multilingual}}}}
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: model-l40s-rerankers}}}}
       patch: *bbr_route_patch
     - applyTo: HTTP_ROUTE
       match:

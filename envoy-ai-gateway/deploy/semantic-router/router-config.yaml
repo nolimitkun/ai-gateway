@@ -33,10 +33,10 @@ listeners:
 
 providers:
   defaults:
-    # An auto request that matches no decision is answered by the CPU fixture
-    # model, so "no decision matched" is distinguishable from every routed
-    # outcome: mock-kserve is the only model whose tier is `fixture`.
-    default_model: mock-kserve
+    # Every auto request must resolve to a governed big/medium/small tier.
+    # Unclassified prompts use the small chat model rather than escaping the
+    # tier contract through a separate fixture-only tier.
+    default_model: qwen3.8-27b
     default_reasoning_effort: medium
     # How each model family is told to think harder. The fixture runtime
     # ignores the flag; declaring it is what lets a decision ask for reasoning
@@ -82,14 +82,14 @@ providers:
 routing:
   decisions:
     # Highest priority: work that is worth the largest model in the catalog.
-    - name: deep-reasoning
+    - name: big
       description: Proofs, derivations, and multi-step quantitative reasoning
       priority: 30
       rules:
         operator: OR
         conditions:
           - type: keyword
-            name: reasoning
+            name: big
       modelRefs:
         - model: kimi-k3
           use_reasoning: true
@@ -99,14 +99,14 @@ routing:
             enabled: true
             mode: replace
             system_prompt: Work step by step and state the reasoning behind each step.
-    - name: code
+    - name: medium
       description: Programming, debugging, and refactoring questions
       priority: 20
       rules:
         operator: OR
         conditions:
           - type: keyword
-            name: code
+            name: medium
       modelRefs:
         - model: deepseek-v4-flash
           use_reasoning: false
@@ -117,21 +117,21 @@ routing:
             mode: replace
             system_prompt: Answer with working code and explain the change briefly.
     # Lowest priority: short conversational turns do not need a large model.
-    - name: small-talk
+    - name: small
       description: Greetings and short conversational turns
       priority: 10
       rules:
         operator: OR
         conditions:
           - type: keyword
-            name: small-talk
+            name: small
       modelRefs:
         - model: qwen3.8-27b
           use_reasoning: false
 
   signals:
     keywords:
-      - name: reasoning
+      - name: big
         operator: OR
         case_sensitive: false
         keywords:
@@ -140,7 +140,7 @@ routing:
           - derive
           - integral
           - step by step
-      - name: code
+      - name: medium
         operator: OR
         case_sensitive: false
         keywords:
@@ -149,7 +149,7 @@ routing:
           - stack trace
           - compile
           - python
-      - name: small-talk
+      - name: small
         operator: OR
         case_sensitive: false
         keywords:

@@ -80,6 +80,8 @@ if $DELETE; then
 
   if context_selected "$ENVOY_CTX"; then
     echo "==> removing policies from $ENVOY_CTX"
+    kubectl --context "$ENVOY_CTX" -n ai-demo delete \
+      securitypolicy/kserve-mock-transcription --ignore-not-found
     kubectl --context "$ENVOY_CTX" delete -f "$COMPONENT_ROOT/policies/rate-limit.yaml" --ignore-not-found
     kubectl --context "$ENVOY_CTX" delete -f "$COMPONENT_ROOT/policies/security-policy.yaml" --ignore-not-found
     kubectl --context "$ENVOY_CTX" delete -f "$COMPONENT_ROOT/policies/ai-route.yaml" --ignore-not-found
@@ -93,6 +95,8 @@ if $DELETE; then
   if context_selected "$AGENT_CTX"; then
     echo "==> removing policies from $AGENT_CTX"
     kubectl --context "$AGENT_CTX" delete -f "$COMPONENT_ROOT/policies" --ignore-not-found
+    kubectl --context "$AGENT_CTX" -n ai-demo delete \
+      agentgatewaypolicy/kserve-mock-members --ignore-not-found
   fi
 
   for ctx in "$KUADRANT_CTX" "$ENVOY_CTX" "$AGENT_CTX"; do
@@ -135,6 +139,10 @@ if context_selected "$ENVOY_CTX"; then
   # Gateway controller generates from it, so that route has to exist to be
   # referenced.
   kubectl --context "$ENVOY_CTX" apply -f "$COMPONENT_ROOT/policies/ai-route.yaml"
+  # Migration from the former endpoint-wide transcription restriction. Every
+  # transcription model is small-tier under the canonical model contract.
+  kubectl --context "$ENVOY_CTX" -n ai-demo delete \
+    securitypolicy/kserve-mock-transcription --ignore-not-found
   kubectl --context "$ENVOY_CTX" apply -f "$COMPONENT_ROOT/policies/security-policy.yaml"
   kubectl --context "$ENVOY_CTX" apply -f "$COMPONENT_ROOT/policies/rate-limit.yaml"
   wait_condition "$ENVOY_CTX" securitypolicy/kserve-mock Accepted
@@ -143,6 +151,9 @@ fi
 
 if context_selected "$AGENT_CTX"; then
   echo "==> agentgateway JWT, authorization, rate limit, and CORS policies"
+  # Migration from the former group-membership authorization policy.
+  kubectl --context "$AGENT_CTX" -n ai-demo delete \
+    agentgatewaypolicy/kserve-mock-members --ignore-not-found
   kubectl --context "$AGENT_CTX" apply -f "$COMPONENT_ROOT/policies"
   wait_condition "$AGENT_CTX" agentgatewaypolicy/kserve-mock-jwt Accepted
 fi

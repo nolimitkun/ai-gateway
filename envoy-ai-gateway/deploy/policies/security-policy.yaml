@@ -1,121 +1,65 @@
-# Envoy Gateway authentication and authorization for the KServe routes.
-#
-# The policy targets the routes rather than the Gateway so that Keycloak's own
-# /realms endpoints, which share the Gateway, stay reachable without a token.
-# Both inference routes are listed: kserve-mock is this repository's own
-# HTTPRoute, and kserve-mock-ai is the one the AI Gateway controller generates
-# for the AIGatewayRoute, under the same name and namespace. Without the
-# second reference the ai.local hostname would reach the InferencePool with no
-# token at all.
-#
-# claimToHeaders turns the verified identity into request headers, which is
-# how the rate limit and quota buckets below get a per-user key: Envoy's rate
-# limit descriptors match on headers, not on claims.
+# Keycloak authenticates the caller; the scalar `tier` claim is the only
+# model-authorization notion. Ordered rules implement the ceiling
+# big >= medium >= small against BBR's trusted resolved-model header.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy
-metadata:
-  name: kserve-mock
-  namespace: ai-demo
+metadata: {name: kserve-mock, namespace: ai-demo}
 spec:
   targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: HTTPRoute
-      name: kserve-mock
-    - group: gateway.networking.k8s.io
-      kind: HTTPRoute
-      name: kserve-mock-ai
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock-ai}
   jwt:
     providers:
       - name: keycloak
         issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
-        audiences:
-          - ai-gateway
+        audiences: [ai-gateway]
         remoteJWKS:
           uri: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway/protocol/openid-connect/certs
           cacheDuration: 5m
         claimToHeaders:
-          - claim: preferred_username
-            header: x-user-id
-          - claim: plan
-            header: x-auth-plan
-          # Org and team are emitted as scalar claims rather than read out of
-          # the group path, because Envoy Gateway matches claims by exact
-          # value only -- no prefix, no regex -- and the Keycloak group
-          # membership claim carries the leaf path (`/acme/research`), not its
-          # ancestors. These two headers are also what keys the nested rate
-          # limit buckets in rate-limit.yaml.
-          - claim: org
-            header: x-org-id
-          - claim: team
-            header: x-team-id
+          - {claim: preferred_username, header: x-user-id}
+          - {claim: tier, header: x-auth-tier}
+          - {claim: org, header: x-org-id}
+          - {claim: team, header: x-team-id}
   authorization:
     defaultAction: Deny
     rules:
-      - name: admins-reach-every-model
+      - name: big-tier
         action: Allow
         principal:
           jwt:
             provider: keycloak
             claims:
-              - name: groups
-                valueType: StringArray
-                values:
-                  - platform-admins
-      # Team entitlement. Rules are evaluated in order and the first match
-      # wins, so this has to sit above the big-tier Deny to have any effect --
-      # appending it below would make it unreachable. Both claims must match
-      # (claims within one rule are AND-ed), and so must the header principal
-      # (principal types are AND-ed too), so this allows exactly "an entitled
-      # team asking for a big-tier model".
-      #
-      # A token with no `org` claim never matches, so it falls through to the
-      # flat rules below: the original users keep their existing behaviour.
-      - name: acme-research-is-entitled-to-big-tier
-        action: Allow
-        principal:
-          jwt:
-            provider: keycloak
-            claims:
-              - name: org
-                valueType: String
-                values:
-                  - acme
-              - name: team
-                valueType: String
-                values:
-                  - research
+              - {name: tier, valueType: String, values: [big]}
           headers:
-            - name: x-gateway-model-name
-              values:
-                - kimi-k3
-                - glm-5.3
-                - deepseek-v4-pro
-      - name: big-tier-models-are-admin-only
+            - {name: x-gateway-model-name, values: [kimi-k3, glm-5.3, deepseek-v4-pro]}
+      - name: deny-big-tier
         action: Deny
         principal:
           headers:
-            - name: x-gateway-model-name
-              values:
-                - kimi-k3
-                - glm-5.3
-                - deepseek-v4-pro
-      - name: model-users
+            - {name: x-gateway-model-name, values: [kimi-k3, glm-5.3, deepseek-v4-pro]}
+      - name: medium-tier
         action: Allow
         principal:
           jwt:
             provider: keycloak
             claims:
-              - name: groups
-                valueType: StringArray
-                values:
-                  - model-users
+              - {name: tier, valueType: String, values: [big, medium]}
+          headers:
+            - {name: x-gateway-model-name, values: [deepseek-v4-flash]}
+      - name: deny-medium-tier
+        action: Deny
+        principal:
+          headers:
+            - {name: x-gateway-model-name, values: [deepseek-v4-flash]}
+      - name: small-tier
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - {name: tier, valueType: String, values: [big, medium, small]}
   cors:
-    allowOrigins:
-      - "https://console.example.com"
-    allowMethods:
-      - GET
-      - POST
-      - OPTIONS
-    allowHeaders:
-      - authorization
-      - content-type
+    allowOrigins: ["https://console.example.com"]
+    allowMethods: [GET, POST, OPTIONS]
+    allowHeaders: [authorization, content-type]

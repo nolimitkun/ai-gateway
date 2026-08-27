@@ -83,15 +83,12 @@ spec:
       backendRefs:
         - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-l40s-inference-pool}
       timeouts: {request: 60s}
-    - name: model-bge-reranker-v2-m3
+    # Gateway API limits one HTTPRoute to 16 rules. These rerankers share the
+    # same task and pool, so one named section can carry both exact matches.
+    - name: model-l40s-rerankers
       matches:
         - path: {type: Exact, value: /v1/rerank}
           headers: [{name: x-gateway-model-name, value: bge-reranker-v2-m3}]
-      backendRefs:
-        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-l40s-inference-pool}
-      timeouts: {request: 60s}
-    - name: model-jina-reranker-v2-base-multilingual
-      matches:
         - path: {type: Exact, value: /v1/rerank}
           headers: [{name: x-gateway-model-name, value: jina-reranker-v2-base-multilingual}]
       backendRefs:
@@ -114,6 +111,14 @@ spec:
     - name: rerank
       matches:
         - path: {type: Exact, value: /v1/rerank}
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-mock-inference-pool}
+      timeouts: {request: 60s}
+    # Multipart model fields are outside BBR v1.2.1. All transcription models
+    # are small and stay on this dedicated shared-fixture route section.
+    - name: transcription
+      matches:
+        - path: {type: Exact, value: /v1/audio/transcriptions}
       backendRefs:
         - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-mock-inference-pool}
       timeouts: {request: 60s}

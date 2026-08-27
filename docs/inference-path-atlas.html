@@ -526,7 +526,7 @@ footer {
 
   <p>An OpenAI client names its model in the JSON body. Gateway API matches on paths and headers. The bridge is the Gateway API Inference Extension <strong>body-based router</strong> (BBR): it reads <code>body.model</code>, writes it into the internal <code>x-gateway-model-name</code> header, and clears Envoy's route cache so the match runs again against the header it just set.</p>
 
-  <p>So the twelve model rules below are unreachable on the first pass and decisive on the second. The four unheadered rules at the bottom are the fallback: they catch anything BBR did not resolve to a known model, plus the model catalog and multipart audio, which BBR skips because it parses JSON only.</p>
+  <p>So the twelve model mappings in eleven pool rules below are unreachable on the first pass and decisive on the second. Five unheadered rules cover chat, embeddings, rerank, transcription, and the final <code>/v1</code> fallback. The two rerankers share one rule because Gateway API caps an HTTPRoute at sixteen rules. Multipart audio has its own named section because BBR parses JSON only; every transcription model is small-tier and uses ordinary route-wide membership authorization.</p>
 
   <div class="routes">
     <ol>
@@ -541,12 +541,12 @@ footer {
       <li><span class="idx">7</span><span>model-bge-m3</span><span>POST /v1/embeddings + <span class="k">bge-m3</span></span><span class="pool">kserve-l40s</span></li>
       <li><span class="idx">8</span><span>model-jina-embeddings-v3</span><span>POST /v1/embeddings + <span class="k">jina-embeddings-v3</span></span><span class="pool">kserve-l40s</span></li>
       <li><span class="idx">9</span><span>model-nomic-embed-text-v2-moe</span><span>POST /v1/embeddings + <span class="k">nomic-embed-text-v2-moe</span></span><span class="pool">kserve-l40s</span></li>
-      <li><span class="idx">10</span><span>model-bge-reranker-v2-m3</span><span>POST /v1/rerank + <span class="k">bge-reranker-v2-m3</span></span><span class="pool">kserve-l40s</span></li>
-      <li><span class="idx">11</span><span>model-jina-reranker-v2-base-&#8203;multilingual</span><span>POST /v1/rerank + <span class="k">jina-reranker-…</span></span><span class="pool">kserve-l40s</span></li>
-      <li class="fallback"><span class="idx">12</span><span>chat</span><span>POST /v1/chat/completions</span><span class="pool">kserve-mock (CPU)</span></li>
-      <li class="fallback"><span class="idx">13</span><span>embeddings</span><span>POST /v1/embeddings</span><span class="pool">kserve-mock (CPU)</span></li>
-      <li class="fallback"><span class="idx">14</span><span>rerank</span><span>POST /v1/rerank</span><span class="pool">kserve-mock (CPU)</span></li>
-      <li class="fallback"><span class="idx">15</span><span>inference</span><span>prefix /v1 &mdash; catalog, audio, everything else</span><span class="pool">kserve-mock (CPU)</span></li>
+      <li><span class="idx">10</span><span>model-l40s-rerankers</span><span>POST /v1/rerank + <span class="k">bge-reranker-v2-m3</span> or <span class="k">jina-reranker-…</span></span><span class="pool">kserve-l40s</span></li>
+      <li class="fallback"><span class="idx">11</span><span>chat</span><span>POST /v1/chat/completions</span><span class="pool">kserve-mock (CPU)</span></li>
+      <li class="fallback"><span class="idx">12</span><span>embeddings</span><span>POST /v1/embeddings</span><span class="pool">kserve-mock (CPU)</span></li>
+      <li class="fallback"><span class="idx">13</span><span>rerank</span><span>POST /v1/rerank</span><span class="pool">kserve-mock (CPU)</span></li>
+      <li class="fallback"><span class="idx">14</span><span>transcription</span><span>POST /v1/audio/transcriptions</span><span class="pool">kserve-mock (CPU)</span></li>
+      <li class="fallback"><span class="idx">15</span><span>inference</span><span>prefix /v1 &mdash; catalog and everything else</span><span class="pool">kserve-mock (CPU)</span></li>
     </ol>
   </div>
 
@@ -593,9 +593,9 @@ footer {
         </div>
         <div class="delta">
           <div class="a"><span class="sig">+</span><span class="k">x-user-id: alice</span>          <span class="c">← preferred_username</span></div>
-          <div class="a"><span class="sig">+</span><span class="k">x-auth-plan: gold</span>         <span class="c">← plan</span></div>
-          <div class="a"><span class="sig">+</span><span class="k">x-org-id: acme</span>            <span class="c">← org   (absent for admins)</span></div>
-          <div class="a"><span class="sig">+</span><span class="k">x-team-id: research</span>       <span class="c">← team  (absent for admins)</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-auth-tier: big</span>          <span class="c">← tier</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-org-id: acme</span>            <span class="c">← org (tenant limits only)</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-team-id: research</span>       <span class="c">← team (tenant limits only)</span></div>
           <div class="x"><span class="sig">✕</span><span class="k">401 · www-authenticate: Bearer realm="…" · body "Jwt is missing"</span></div>
         </div>
       </div>
@@ -627,7 +627,7 @@ footer {
           <p>It resolves the auto aliases and forwards a concrete model name unchanged. A matched decision may also replace the system prompt.</p>
         </div>
         <div class="delta">
-          <div class="r"><span class="sig">~</span><span class="k">body.model: "auto" → "kimi-k3"</span>              <span class="c">decision deep-reasoning</span></div>
+          <div class="r"><span class="sig">~</span><span class="k">body.model: "auto" → "kimi-k3"</span>              <span class="c">decision big</span></div>
           <div class="r"><span class="sig">~</span><span class="k">body.messages[0]: system prompt replaced</span></div>
           <div class="a"><span class="sig">+</span><span class="k">x-selected-model: kimi-k3</span>                   <span class="c">(request)</span></div>
           <div class="a"><span class="sig">+</span><span class="k">x-vsr-selected-decision / -model / -confidence / -matched-keywords</span>  <span class="c">(response)</span></div>
@@ -672,15 +672,16 @@ footer {
           <span class="res">SecurityPolicy · .authorization</span>
         </div>
         <div class="hop-body">
-          <p><code>defaultAction: Deny</code> and four first-match-wins rules. Because this sits <em>after</em> BBR, the rules can name <code>x-gateway-model-name</code> &mdash; a value no client can supply.</p>
-          <p>Order is load-bearing: the entitlement rule must sit above the big-tier <code>Deny</code> or it is unreachable. Both the <code>org</code> and <code>team</code> claims are matched, because a team name is unique only inside its org.</p>
+          <p><code>defaultAction: Deny</code> and five first-match-wins rules. Because this sits <em>after</em> BBR, the rules can name <code>x-gateway-model-name</code> &mdash; a value no client can supply.</p>
+          <p>One scalar claim implements a ceiling: <code>big</code> reaches every tier, <code>medium</code> reaches medium and small, and <code>small</code> reaches small only. Org and team are not consulted.</p>
         </div>
         <div class="delta">
-          <div class="c"><span class="sig"> </span>1 admins-reach-every-model        <span class="k">Allow</span>  groups ∋ platform-admins</div>
-          <div class="c"><span class="sig"> </span>2 acme-research-is-entitled…      <span class="k">Allow</span>  org=acme ∧ team=research ∧ model ∈ B300</div>
-          <div class="c"><span class="sig"> </span>3 big-tier-models-are-admin-only  <span class="k">Deny</span>   model ∈ B300</div>
-          <div class="c"><span class="sig"> </span>4 model-users                     <span class="k">Allow</span>  groups ∋ model-users</div>
-          <div class="x"><span class="sig">✕</span><span class="k">403 · body "RBAC: access denied"</span>   <span class="c">measured for frank (globex/research)</span></div>
+          <div class="c"><span class="sig"> </span>1 big-tier       <span class="k">Allow</span>  claim tier=big ∧ resolved tier=big</div>
+          <div class="c"><span class="sig"> </span>2 deny-big-tier  <span class="k">Deny</span>   resolved tier=big</div>
+          <div class="c"><span class="sig"> </span>3 medium-tier    <span class="k">Allow</span>  claim tier∈{big,medium} ∧ resolved tier=medium</div>
+          <div class="c"><span class="sig"> </span>4 deny-medium-tier <span class="k">Deny</span> resolved tier=medium</div>
+          <div class="c"><span class="sig"> </span>5 small-tier     <span class="k">Allow</span>  claim tier∈{big,medium,small}</div>
+          <div class="x"><span class="sig">✕</span><span class="k">403 · body "RBAC: access denied"</span>   <span class="c">medium ceiling requesting big</span></div>
         </div>
       </div>
     </li>
@@ -834,15 +835,16 @@ footer {
       <div class="hop-card">
         <div class="hop-top">
           <span class="hop-name">traffic.authorization · action: Require</span>
-          <span class="res">kserve-mock-members + …-big-tier</span>
+          <span class="res">kserve-mock-small-tier + …-medium-tier + …-big-tier</span>
         </div>
         <div class="hop-body">
-          <p>Pure CEL over the verified claims &mdash; there is no claim-matching DSL. <code>Require</code> rules are cumulative, so a separate policy can only ever subtract access; widening the B300 class to an entitled team means editing the expression that already denies.</p>
-          <p>The org/team pair is read straight off the group path, since a subtree test is just <code>startsWith</code>. Measured: carol (<code>/acme/research</code>) 200, frank (<code>/globex/research</code>) <strong>403</strong>, and dave forging <code>x-gateway-model-name: mock-kserve</code> while asking for <code>kimi-k3</code> also <strong>403</strong> &mdash; the transformation had already overwritten his header.</p>
+          <p>Pure CEL over the verified claims &mdash; there is no claim-matching DSL. Three cumulative rules implement the same scalar tier ceiling. The big rule matches exactly the three B300 names, the medium rule matches <code>deepseek-v4-flash</code>, and the route-wide small rule covers every API including multipart transcription.</p>
+          <p>Org and team are deliberately absent. Measured: a big-tier token reaches all three tiers, a medium-tier token reaches medium and small, and forging <code>x-gateway-model-name: mock-kserve</code> while asking for <code>kimi-k3</code> still returns <strong>403</strong> because the transformation overwrites the header.</p>
         </div>
         <div class="delta">
-          <div class="c"><span class="sig"> </span>jwt.groups.exists(g, g == "model-users")</div>
-          <div class="c"><span class="sig"> </span>!(hdr in B300) || jwt.groups ∋ platform-admins || jwt.group_paths ∋ "/acme/research"</div>
+          <div class="c"><span class="sig"> </span>jwt.tier ∈ {big, medium, small}</div>
+          <div class="c"><span class="sig"> </span>resolved tier != medium || jwt.tier ∈ {big, medium}</div>
+          <div class="c"><span class="sig"> </span>resolved tier != big || jwt.tier == big</div>
           <div class="x"><span class="sig">✕</span><span class="k">403 · content-type text/plain · body "authorization failed"</span></div>
         </div>
       </div>
@@ -942,7 +944,7 @@ footer {
         </div>
         <div class="hop-body">
           <p><code>INSERT_BEFORE</code> the canonical <code>ext_proc</code> name, which is how it lands immediately ahead of KServe's endpoint picker. A distinct filter name is required: the EPP's per-route override would otherwise replace this filter's gRPC service.</p>
-          <p>The per-route overrides are exact-name matches, so all fifteen route names are enumerated by hand. That verbosity is the price of having no policy API for this.</p>
+          <p>The per-route overrides are exact-name matches, so all fourteen JSON route names are enumerated by hand. The transcription and catch-all sections intentionally bypass BBR. That verbosity is the price of having no policy API for this.</p>
         </div>
         <div class="delta">
           <div class="r"><span class="sig">~</span><span class="k">x-gateway-model-name := body.model</span>  <span class="c">← the body the router rewrote</span></div>
@@ -981,13 +983,13 @@ footer {
           <span class="res">AuthPolicy + RateLimitPolicy + TokenRateLimitPolicy</span>
         </div>
         <div class="hop-body">
-          <p>One filter carrying all of Kuadrant. Authorino verifies the token; three <code>when</code>-gated rules check the B300 class against <code>x-gateway-model-name</code>, which works precisely because BBR ran three hops earlier. Authorization patterns are ANDed, <code>any</code> arms are ORed, and the entitled arm nests <code>all</code> inside <code>any</code> so binding the org does not lock out admins, who carry no <code>org</code> claim.</p>
+          <p>One filter carrying all of Kuadrant. Authorino verifies the token; a route-wide small rule, one H200/medium rule, and three B300/big model rules implement the same scalar tier ceiling. Org and team are used only by the separate tenant-limit probes.</p>
           <p>On success Authorino injects four identity headers toward the upstream. Limitador then counts, and the token budget charges <code>usage.total_tokens</code> off the response.</p>
         </div>
         <div class="delta">
-          <div class="a"><span class="sig">+</span><span class="k">x-auth-user: alice · x-auth-plan: gold · x-auth-org · x-auth-team</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-auth-user: alice · x-auth-tier: big · x-auth-org · x-auth-team</span></div>
           <div class="x"><span class="sig">✕</span><span class="k">401 · x-ext-auth-reason: "a Keycloak access token is required; POST /realms/…"</span></div>
-          <div class="x"><span class="sig">✕</span><span class="k">403 · x-ext-auth-reason: "the token identity is not allowed to call this model class"</span></div>
+          <div class="x"><span class="sig">✕</span><span class="k">403 · x-ext-auth-reason: "the token tier does not allow the resolved model tier"</span></div>
           <div class="x"><span class="sig">✕</span><span class="k">429 · token budget spent on request 4 of 6 (100/min)</span></div>
         </div>
       </div>
@@ -1087,9 +1089,9 @@ footer {
       <tbody>
         <tr>
           <td class="lab">Identity headers</td>
-          <td><span class="m">x-user-id: alice<br>x-auth-plan: gold</span></td>
+          <td><span class="m">x-user-id: alice<br>x-auth-tier: big</span></td>
           <td><span class="m warn">none</span></td>
-          <td><span class="m">x-auth-user: alice<br>x-auth-plan: gold</span></td>
+          <td><span class="m">x-auth-user: alice<br>x-auth-tier: big</span></td>
         </tr>
         <tr>
           <td class="lab">Named by</td>
@@ -1110,7 +1112,7 @@ footer {
           <td colspan="3"><span class="m">unchanged by every gateway &mdash; the <code>mock_*</code> fields are the fixture reporting what it received</span></td>
         </tr>
       </tbody>
-      <caption>The fixture echoes four header names only (<span class="mono">x-auth-user, x-auth-plan, x-user-id, x-gateway-model-name</span>) plus <span class="mono">x-selected-model</span> and <span class="mono">x-vsr-*</span>. Envoy's <span class="mono">x-org-id</span>/<span class="mono">x-team-id</span> and Kuadrant's <span class="mono">x-auth-org</span>/<span class="mono">x-auth-team</span> are outside that allow-list, so their arrival is unobserved rather than disproved.</caption>
+      <caption>The fixture echoes four header names only (<span class="mono">x-auth-user, x-auth-tier, x-user-id, x-gateway-model-name</span>) plus <span class="mono">x-selected-model</span> and <span class="mono">x-vsr-*</span>. Envoy's <span class="mono">x-org-id</span>/<span class="mono">x-team-id</span> and Kuadrant's <span class="mono">x-auth-org</span>/<span class="mono">x-auth-team</span> are outside that allow-list, so their arrival is unobserved rather than disproved.</caption>
     </table>
   </div>
 
@@ -1194,7 +1196,7 @@ footer {
         <tr><td class="lab">Does <code>transformation</code> run after <code>extProc</code>?</td><td class="good"><span class="m">yes &mdash; a probe transformation read a header BBR had just set</span></td></tr>
         <tr><td class="lab">Does the router emit <code>x-selected-model</code> for models outside its own catalog?</td><td class="good"><span class="m">yes &mdash; including glm-5.3 and deepseek-v4-pro</span></td></tr>
         <tr><td class="lab">Is <code>x-selected-model</code> forgeable?</td><td class="good"><span class="m">no &mdash; a client-supplied value is overwritten</span></td></tr>
-        <tr><td class="lab">Can a forged <code>x-gateway-model-name</code> downgrade the authorization check?</td><td class="good"><span class="m">no &mdash; unentitled caller still 403</span></td></tr>
+        <tr><td class="lab">Can a forged <code>x-gateway-model-name</code> downgrade the authorization check?</td><td class="good"><span class="m">no &mdash; medium-tier caller still 403</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -1211,15 +1213,15 @@ footer {
   <div class="callout">
     <span class="tag">The trade-off with no good answer</span>
     <h3>The router now owns a security-relevant name</h3>
-    <p>Because the router resolves the model that selects the pool <em>and</em> that the B300 authorization rule reads, its availability is now load-bearing. Measured with the router scaled to zero:</p>
+    <p>Because the router resolves the model that selects the pool <em>and</em> that the tier-ceiling authorization reads, its availability is now load-bearing. Measured with the router scaled to zero:</p>
     <div class="delta" style="margin:14px -22px -20px; border-radius:0">
-      <div class="r"><span class="sig">~</span><span class="k">FailOpen</span>    <span class="c">explicit chat 200, auto 404 — but an unentitled caller asking for
+      <div class="r"><span class="sig">~</span><span class="k">FailOpen</span>    <span class="c">explicit chat 200, auto 404 — but a medium-tier caller asking for
                 kimi-k3 was served it (HTTP 200): no filter could name the model</span></div>
       <div class="a"><span class="sig">✓</span><span class="k">FailClosed</span>  <span class="c">all chat 500, no bypass; embeddings and reranking unaffected</span></div>
     </div>
   </div>
 
-  <p>FailOpen would keep the <code>Semantic router unavailable</code> row identical across all three stacks, at the price of dropping an entitlement check during an outage. FailClosed is the one shipped &mdash; BBR already carries it for the same reason, and the router has taken over BBR's job on this path &mdash; so that row now reads <span class="mono">explicit 500 / auto 500</span> here against <span class="mono">explicit 200 / auto 404</span> elsewhere. A comparison row that differs honestly beats one that matches by hiding something.</p>
+  <p>FailOpen would keep the <code>Semantic router unavailable</code> row identical across all three stacks, at the price of dropping the tier check during an outage. FailClosed is the one shipped &mdash; BBR already carries it for the same reason, and the router has taken over BBR's job on this path &mdash; so that row now reads <span class="mono">explicit 500 / auto 500</span> here against <span class="mono">explicit 200 / auto 404</span> elsewhere. A comparison row that differs honestly beats one that matches by hiding something.</p>
 
   <p>A <code>PostRouting</code> BBR pass was tried as a way to have both: run the router before routing for the pool, then BBR before authorization to restore the model name. Authorization does not see that filter's header mutation, so it does not work.</p>
 </section>
@@ -1227,9 +1229,9 @@ footer {
 <!-- ===================================================== -->
 <section id="gate">
   <h2><span class="sec-no">08</span>Whose model does the gate judge?</h2>
-  <p class="deck">Once the router resolves <code>auto</code> before authorization runs, the entitlement check stops being about what the client asked for. It is about what the router picked &mdash; and the client cannot see the difference from the request it sent.</p>
+  <p class="deck">Once the router resolves <code>auto</code> before authorization runs, the tier check stops being about what the client asked for. It is about what the router picked &mdash; and the client cannot see the difference from the request it sent.</p>
 
-  <p>Dave belongs to <code>acme/support</code>. He is a <code>model-users</code> member, not a platform admin, and his team is not the entitled one. He sends the same three-field body every time:</p>
+  <p>Dave has a <code>medium</code> tier ceiling. His org and team are irrelevant to model access. He sends the same three-field body every time:</p>
 
   <div class="delta" style="border:1px solid var(--rule); border-radius:3px; margin-bottom:22px">
     <div class="c"><span class="sig"> </span>POST /v1/chat/completions</div>
@@ -1272,25 +1274,25 @@ footer {
           <td class="good"><span class="m">200</span></td>
         </tr>
       </tbody>
-      <caption>carol (<span class="mono">acme/research</span>, entitled) and alice (platform admin) return 200 on all three prompts on all three stacks. Kuadrant measured over two warm passes.</caption>
+      <caption>Carol and Alice have a big tier ceiling and return 200 on all three prompts on all three stacks. Kuadrant measured over two warm passes.</caption>
     </table>
   </div>
 
   <p>The mechanism is the same one that makes pool routing work. Authorization reads <code>x-gateway-model-name</code>, and by the time it runs that header holds the resolved model &mdash; BBR derived it from the body the router rewrote on Envoy and Kuadrant, and the pre-routing transformation copied it from <code>x-selected-model</code> on agentgateway. There is no point in any of the three chains where a filter still knows the client said <code>auto</code>.</p>
 
-  <p>That is arguably correct: an entitlement should be a ceiling, not a suggestion, and a caller should not reach a restricted model class by asking indirectly. But consider what it looks like from dave&rsquo;s side. He never named <code>kimi-k3</code>. He asked a question, and got:</p>
+  <p>That is arguably correct: a tier is a ceiling, not a suggestion, and a caller should not reach a higher tier by asking indirectly. But consider what it looks like from dave&rsquo;s side. He never named <code>kimi-k3</code>. He asked a question, and got:</p>
 
   <div class="delta" style="border:1px solid var(--rule); border-radius:3px; margin:0 0 22px">
-    <div class="x"><span class="sig">✕</span><span class="k">403 · "the token identity is not allowed to call this model class"</span></div>
+    <div class="x"><span class="sig">✕</span><span class="k">403 · "the token tier does not allow the resolved model tier"</span></div>
   </div>
 
-  <p>Which class, and what he could have asked for instead, are not in the answer. Nothing in his request predicts it, and nothing in the response tells him what to retry with.</p>
+  <p>Which model caused the higher tier, and what he could have asked for instead, are not in the answer. Nothing in his request predicts it, and nothing in the response tells him what to retry with.</p>
 
   <div class="callout">
     <span class="tag">Open design question</span>
     <h3>Three ways to resolve it, in ascending cost</h3>
-    <p><strong>Make the denial actionable.</strong> Name the class and an allowed alternative in the message. All three stacks already carry a configurable string here &mdash; Kuadrant's <code>unauthorized.message</code>, and the equivalents on the other two. Cheapest, and it turns a dead end into a retry.</p>
-    <p><strong>Degrade instead of denying.</strong> Give the router an entitlement-aware model set so it never selects a class the caller cannot reach. This is the behaviour most people assume <code>auto</code> already has. It needs the caller's identity at the router, which none of the three stacks currently passes to it.</p>
+    <p><strong>Make the denial actionable.</strong> Name the tier and an allowed alternative in the message. All three stacks already carry a configurable string here &mdash; Kuadrant's <code>unauthorized.message</code>, and the equivalents on the other two. Cheapest, and it turns a dead end into a retry.</p>
+    <p><strong>Degrade instead of denying.</strong> Give the router a tier-aware model set so it never selects a tier the caller cannot reach. This is the behaviour most people assume <code>auto</code> already has. It needs the caller's identity at the router, which none of the three stacks currently passes to it.</p>
     <p><strong>Leave it.</strong> Defensible, and the current state. Worth being a decision rather than a side effect of where the filters sit.</p>
   </div>
 </section>
@@ -1356,7 +1358,7 @@ footer {
     </table>
   </div>
 
-  <p>Not a privilege escalation: the B300 authorization rule reads <code>x-gateway-model-name</code>, and forging a big-tier value into it gets the caller denied rather than admitted. The damage is misrouting, and it reads as an ordinary 404 or a quiet fallback to the CPU fixture rather than as a routing defect.</p>
+  <p>Not a privilege escalation: the big-tier authorization rule reads <code>x-gateway-model-name</code>, and forging a big-tier value into it gets the caller denied rather than admitted. The damage is misrouting, and it reads as an ordinary 404 or a quiet fallback to the CPU fixture rather than as a routing defect.</p>
 
   <p>The pattern is worth naming, because it is the third time in this page: <strong>a header is only trustworthy on the path where the thing that sets it actually runs.</strong> Guarded now in two places &mdash; the offline validator rejects any transformation arm that writes the routing header without being scoped to chat, and the comparison sends a forged <code>x-selected-model</code> at <code>/v1/rerank</code> on every run, on all three stacks.</p>
 

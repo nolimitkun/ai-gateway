@@ -48,6 +48,20 @@ spec:
           name: kserve-mock-inference-pool
       timeouts:
         request: 60s
+    # BBR v1.2.1 cannot extract the model field from multipart requests. All
+    # transcription models are small, so this named section stays on the
+    # shared fixture and uses the route-wide small-tier authorization.
+    - name: transcription
+      matches:
+        - path:
+            type: Exact
+            value: /v1/audio/transcriptions
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: kserve-mock-inference-pool
+      timeouts:
+        request: 60s
     - name: inference
       matches:
         - path:

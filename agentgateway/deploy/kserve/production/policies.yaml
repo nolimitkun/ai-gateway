@@ -1,0 +1,44 @@
+# Every model in this production profile is small-tier. JWT authentication and
+# the same tier-ceiling claim used by the shared fixture cover all four routes.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: vllm-jwt
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-chat}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-embedding}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-rerank}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-transcription}
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      location:
+        header: {name: Authorization, prefix: "Bearer "}
+      providers:
+        - issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+          audiences: [ai-gateway]
+          jwks:
+            remote:
+              backendRef: {name: keycloak, port: 8080}
+              jwksPath: /realms/ai-gateway/protocol/openid-connect/certs
+              cacheDuration: 5m
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: vllm-small-tier
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-chat}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-embedding}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-rerank}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-transcription}
+  traffic:
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - 'has(jwt.tier) && jwt.tier in ["big", "medium", "small"]'

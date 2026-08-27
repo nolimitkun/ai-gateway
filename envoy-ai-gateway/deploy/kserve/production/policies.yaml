@@ -1,0 +1,36 @@
+# Every model in this production profile is small-tier, so one route-attached
+# policy applies JWT and the tier ceiling to all four APIs.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: vllm-small
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-chat}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-embedding}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-rerank}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-transcription}
+  jwt:
+    providers:
+      -
+        name: keycloak
+        issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        audiences: [ai-gateway]
+        remoteJWKS:
+          uri: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway/protocol/openid-connect/certs
+          cacheDuration: 5m
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: small-tier
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - {name: tier, valueType: String, values: [big, medium, small]}
+  cors:
+    allowOrigins: ["https://console.example.com"]
+    allowMethods: [GET, POST, OPTIONS]
+    allowHeaders: [authorization, content-type]

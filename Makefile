@@ -167,6 +167,7 @@ validate: ## check manifests and router config offline
 	$(PYTHON) scripts/validate-policies.py
 	$(PYTHON) scripts/validate-router-config.py
 	$(PYTHON) scripts/validate-tenant-model.py
+	$(PYTHON) scripts/validate-tier-contract.py
 
 vllm-production: ## deploy pinned vLLM services (set VLLM_CONTEXT)
 	@test -n "$(VLLM_CONTEXT)" || { echo 'set VLLM_CONTEXT to a kubectl context' >&2; exit 2; }
@@ -179,7 +180,8 @@ vllm-production-down: ## remove production vLLM services from VLLM_CONTEXT
 vllm-validate: ## validate production vLLM APIs (set VLLM_BASE_URL)
 	@test -n "$(VLLM_BASE_URL)" || { echo 'set VLLM_BASE_URL to the Gateway URL' >&2; exit 2; }
 	$(PYTHON) scripts/validate-vllm-contract.py --base-url "$(VLLM_BASE_URL)" \
-	  --chat-model qwen3-8b \
+	  --check-auto $(if $(VLLM_TOKEN),--token "$(VLLM_TOKEN)",) \
+	  --chat-model qwen3.8-27b \
 	  --embedding-model qwen3-embedding-8b \
 	  --rerank-model bge-reranker-v2-m3 \
-	  --transcription-model whisper-large-v3-turbo
+	  --transcription-model whisper-large-v3

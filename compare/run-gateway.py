@@ -38,7 +38,7 @@ CONFIG = {
         "context": "kind-ai-gw-agent", "base": "http://localhost:8081",
         "gateway": "ai-gateway", "gateway_ns": "ai-demo",
         "policy_condition": "Accepted",
-        "policies": ["agentgatewaypolicy/kserve-mock-jwt", "agentgatewaypolicy/kserve-mock-members", "agentgatewaypolicy/kserve-mock-big-tier", "agentgatewaypolicy/kserve-mock-rate-limit", "agentgatewaypolicy/kserve-mock-cors"],
+        "policies": ["agentgatewaypolicy/kserve-mock-jwt", "agentgatewaypolicy/kserve-mock-small-tier", "agentgatewaypolicy/kserve-mock-medium-tier", "agentgatewaypolicy/kserve-mock-big-tier", "agentgatewaypolicy/kserve-mock-rate-limit", "agentgatewaypolicy/kserve-mock-cors"],
         # The semantic attachment replaces the pre-routing BBR policy under its
         # own name, so presence of the router is read from that object.
         "router": ("ai-demo", "agentgatewaypolicy/model-body-router", "Accepted"),
@@ -431,11 +431,16 @@ def run(cluster: str, sample_count: int) -> dict:
     result["llmisvc_ready"] = "Yes" if has_condition(llmisvc, "Ready") else "No"
     result["route_ready"] = f"{'Yes' if has_condition(route, 'Accepted') else 'No'} / {'Yes' if has_condition(route, 'ResolvedRefs') else 'No'}"
     route_names = [rule.get("name") for rule in route.get("spec", {}).get("rules", [])]
-    base_rules = ["chat", "embeddings", "rerank", "inference"]
-    model_rule_count = sum(str(name).startswith("model-") for name in route_names)
+    base_rules = ["chat", "embeddings", "rerank", "transcription", "inference"]
+    model_rules = [
+        rule for rule in route.get("spec", {}).get("rules", [])
+        if str(rule.get("name", "")).startswith("model-")
+    ]
+    model_rule_count = len(model_rules)
+    model_mapping_count = sum(len(rule.get("matches", [])) for rule in model_rules)
     result["route_rules"] = (
-        f"body.model + {model_rule_count} pool rules"
-        if model_rule_count and route_names[-4:] == base_rules
+        f"{model_mapping_count} body.model mappings / {model_rule_count} pool rules"
+        if model_rule_count and route_names[-5:] == base_rules
         else ("3 JSON tasks + /v1 fallback" if route_names == base_rules else "Unexpected")
     )
 
@@ -660,10 +665,17 @@ def run(cluster: str, sample_count: int) -> dict:
             else f"anonymous {anonymous_tasks} / valid {valid_tasks}"
         )
         _, identity_body, _ = json_call(cfg, "/v1/chat/completions", access_token, CHAT)
-        identity_headers = identity_body.get("mock_gateway_headers", {})
+        # Report only verified identity evidence. BBR's internal model header
+        # may also reach the fixture and is validated by the routing probes;
+        # it is not an identity header and should not contaminate this row.
+        identity_headers = {
+            key: value
+            for key, value in identity_body.get("mock_gateway_headers", {}).items()
+            if key in {"x-auth-user", "x-auth-tier", "x-user-id"}
+        }
         expected_identity = {
-            "ai-gw-kuadrant": {"x-auth-user": "alice", "x-auth-plan": "gold"},
-            "ai-gw-envoy": {"x-user-id": "alice", "x-auth-plan": "gold"},
+            "ai-gw-kuadrant": {"x-auth-user": "alice", "x-auth-tier": "big"},
+            "ai-gw-envoy": {"x-user-id": "alice", "x-auth-tier": "big"},
             "ai-gw-agent": {},
         }[cluster]
         if identity_headers == expected_identity:
@@ -675,6 +687,61 @@ def run(cluster: str, sample_count: int) -> dict:
         restricted, _, _ = json_call(cfg, "/v1/chat/completions", bob, BIG_CHAT)
         allowed, _, _ = json_call(cfg, "/v1/chat/completions", access_token, BIG_CHAT)
         result["authorization"] = f"{guest} / {restricted} / {allowed}"
+        # Tier authorization is model-based: only B300 chat is big. H200 chat
+        # is medium, while H100 embeddings and L40S transcription are small.
+        # Auto must be judged on the selected model, not the literal alias.
+        dave, carol = token(cfg, "dave"), token(cfg, "carol")
+        medium_ceiling = [
+            json_call(cfg, "/v1/chat/completions", dave, BIG_CHAT)[0],
+            json_call(
+                cfg, "/v1/chat/completions", dave,
+                {"model": "deepseek-v4-flash", "messages": CHAT["messages"]},
+            )[0],
+            json_call(
+                cfg, "/v1/embeddings", dave,
+                {"model": "qwen3-embedding-8b", "input": "tier policy"},
+            )[0],
+            request(
+                cfg["base"] + "/v1/audio/transcriptions", method="POST",
+                headers=auth_headers(dave),
+                multipart={"file": ("tier.wav", b"", "audio/wav"), "model": "whisper-large-v3"},
+            )[0],
+        ]
+        big_ceiling = [
+            json_call(cfg, "/v1/chat/completions", carol, BIG_CHAT)[0],
+            json_call(
+                cfg, "/v1/chat/completions", carol,
+                {"model": "deepseek-v4-flash", "messages": CHAT["messages"]},
+            )[0],
+            json_call(
+                cfg, "/v1/embeddings", carol,
+                {"model": "qwen3-embedding-8b", "input": "tier policy"},
+            )[0],
+            request(
+                cfg["base"] + "/v1/audio/transcriptions", method="POST",
+                headers=auth_headers(carol),
+                multipart={"file": ("tier.wav", b"", "audio/wav"), "model": "whisper-large-v3"},
+            )[0],
+        ]
+        if router_present:
+            auto_codes = [
+                json_call(
+                    cfg, "/v1/chat/completions", dave,
+                    {"model": "auto", "messages": [{"role": "user", "content": prompt}]},
+                )[0]
+                for prompt in AUTO_PROMPTS
+            ]
+            auto_summary = "auto 403/200/200" if auto_codes == [403, 200, 200] else f"auto {auto_codes}"
+        else:
+            auto_summary = "auto not installed"
+        if medium_ceiling == [403, 200, 200, 200] and big_ceiling == [200] * 4:
+            result["tier_authorization"] = (
+                f"medium ceiling 403/200/200/200; big ceiling 4/4; {auto_summary}"
+            )
+        else:
+            result["tier_authorization"] = (
+                f"medium {medium_ceiling} / big {big_ceiling}; {auto_summary}"
+            )
         result["request_limit"] = probe_limit(cfg, access_token, ("x-rate-limit-probe", "true"), 8)
         bob_rate, _, _ = json_call(cfg, "/v1/chat/completions", bob, CHAT, {"x-rate-limit-probe": "true"})
         expected_bob = 200 if cluster == "ai-gw-envoy" else 429
@@ -685,23 +752,17 @@ def run(cluster: str, sample_count: int) -> dict:
         result["quota_limit"] = probe_limit(cfg, access_token, ("x-quota-probe", f"probe-{int(time.time())}"), 6)
         if cluster in ("ai-gw-kuadrant", "ai-gw-agent") and str(result["quota_limit"]).startswith("429"):
             result["quota_limit"] += "; shared bucket"
-        # Team entitlement: two members of the same org, one team entitled to
-        # the B300 class and one not. Both are ordinary model-users, so a 403
-        # for the unentitled team and a 200 for the entitled one is the whole
-        # hierarchy working -- the class is reached by team, not by admin.
+        # Model access is independent of org and team: only the token's tier
+        # ceiling matters. Carol is big and Dave is medium.
         carol_big, _, _ = json_call(cfg, "/v1/chat/completions", token(cfg, "carol"), BIG_CHAT)
         dave_big, _, _ = json_call(cfg, "/v1/chat/completions", token(cfg, "dave"), BIG_CHAT)
-        result["team_entitlement"] = f"unentitled {dave_big} / entitled {carol_big}"
-        # The same team name in a different org. Frank is /globex/research and
-        # carol is /acme/research, so a rule that grants on the team name alone
-        # cannot tell them apart -- the entitlement leaks to every org that
-        # happens to use the name. Nothing about the gateway looks wrong when
-        # it does, and the row above still reads correctly, which is why this
-        # is a probe of its own.
+        result["tier_ceiling"] = f"medium {dave_big} / big {carol_big}"
+        # Frank shares Carol's team name but has a small tier. This proves
+        # tenancy metadata cannot accidentally grant model access.
         frank_big, _, _ = json_call(cfg, "/v1/chat/completions", token(cfg, "frank"), BIG_CHAT)
-        result["cross_org_entitlement"] = {
-            403: "Denied (HTTP 403)",
-            200: "GRANTED -- entitlement leaked across orgs (HTTP 200)",
+        result["tier_independent_of_tenant"] = {
+            403: "Denied by small tier (HTTP 403)",
+            200: "GRANTED -- tenant metadata bypassed tier (HTTP 200)",
         }.get(frank_big, f"Inconclusive (HTTP {frank_big})")
         if cluster == "ai-gw-agent":
             result.update({
@@ -718,7 +779,7 @@ def run(cluster: str, sample_count: int) -> dict:
         else:
             result["token_limit"] = probe_limit(cfg, access_token, ("x-token-limit-probe", "true"), 6, BIG_CHAT)
     else:
-        for key in ("authentication", "task_authentication", "identity_headers", "authorization", "team_entitlement", "cross_org_entitlement", "request_limit", "rate_scope", "quota_limit", "tenant_nesting", "tenant_header_spoof", "tenant_route_scope", "token_limit"):
+        for key in ("authentication", "task_authentication", "identity_headers", "authorization", "tier_authorization", "tier_ceiling", "tier_independent_of_tenant", "request_limit", "rate_scope", "quota_limit", "tenant_nesting", "tenant_header_spoof", "tenant_route_scope", "token_limit"):
             result[key] = "No policy" if not policies_present else "Token error"
 
     code, _, cors_headers = request(

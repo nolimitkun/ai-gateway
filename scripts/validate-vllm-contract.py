@@ -24,6 +24,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--routing-header", help="header used by production task routes")
+    parser.add_argument("--token", help="bearer token for a protected production route")
+    parser.add_argument("--check-auto", action="store_true", help="verify the production chat auto alias")
     for task, default in TASK_MODELS.items():
         parser.add_argument(f"--{task}-model", default=default)
         parser.add_argument(f"--{task}-route", default=task)
@@ -37,6 +39,8 @@ class Contract:
 
     def headers(self, task, content_type="application/json"):
         result = {"content-type": content_type}
+        if self.args.token:
+            result["authorization"] = f"Bearer {self.args.token}"
         if self.args.routing_header:
             result[self.args.routing_header] = getattr(self.args, f"{task}_route")
         return result
@@ -107,6 +111,18 @@ class Contract:
         assert chunks and all(chunk["object"] == "chat.completion.chunk" for chunk in chunks)
         assert any(chunk.get("usage", {}).get("total_tokens", 0) >= 1 for chunk in chunks)
 
+    def auto(self):
+        payload = self.json(
+            "chat",
+            "/v1/chat/completions",
+            {
+                "model": "auto",
+                "messages": [{"role": "user", "content": "Reply with gateway."}],
+                "max_tokens": 16,
+            },
+        )
+        assert payload["model"] == self.args.chat_model, payload.get("model")
+
     def embeddings(self):
         payload = self.json(
             "embedding",
@@ -168,14 +184,16 @@ class Contract:
 
 def main():
     contract = Contract(parse_args())
-    checks = (
+    checks = [
         contract.models,
         contract.chat,
         contract.stream,
         contract.embeddings,
         contract.rerank,
         contract.transcription,
-    )
+    ]
+    if contract.args.check_auto:
+        checks.insert(3, contract.auto)
     for check in checks:
         check()
         print(f"PASS {check.__name__}")

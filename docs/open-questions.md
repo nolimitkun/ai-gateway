@@ -10,19 +10,18 @@ cost. None of them block anything today.
 
 ---
 
-## 1. Should `model: auto` degrade or deny when the caller is not entitled?
+## 1. Should `model: auto` degrade or deny above the caller's tier ceiling?
 
 **Status:** open. Currently denies.
 
-The entitlement check judges the model the semantic router *picked*, not the
+The tier check judges the model the semantic router *picked*, not the
 one the client asked for. Authorization reads `x-gateway-model-name`, and by
 the time it runs that header holds the resolved model — on Envoy and Kuadrant
 BBR derived it from the body the router rewrote, on agentgateway a PreRouting
 transformation copied it from `x-selected-model`. No filter in any of the three
 chains still knows the client said `auto`.
 
-Measured 2026-08-27 on all three clusters. `dave` is in `acme/support` — a
-`model-users` member, not an admin, not on the entitled `acme/research` team.
+Measured 2026-08-27 on all three clusters. `dave` has a `medium` tier ceiling.
 He sends an identical body every time and only the prompt text varies:
 
 | prompt | router picks | Envoy | agentgateway | Kuadrant |
@@ -31,25 +30,25 @@ He sends an identical body every time and only the prompt text varies:
 | "refactor this python function" | deepseek-v4-flash | 200 | 200 | 200 |
 | "hello there, good morning" | qwen3.8-27b | not run | 200 | 200 |
 
-`carol` (entitled) and `alice` (admin) return 200 on all three prompts on all
-three stacks.
+`carol` and `alice`, whose ceiling is `big`, return 200 on all three prompts on
+all three stacks.
 
-This is arguably correct — an entitlement should be a ceiling, not a
+This is arguably correct — a tier claim is a ceiling, not a
 suggestion. The problem is that it is opaque: dave never named `kimi-k3`,
 cannot predict the 403 from his request, and the body says only "the token
-identity is not allowed to call this model class" without naming the class or
+token tier does not allow the resolved model tier" without naming an allowed
 an allowed alternative.
 
 Options, ascending cost:
 
-1. **Make the denial actionable.** Name the class and an allowed alternative in
+1. **Make the denial actionable.** Name the tier and an allowed alternative in
    the message. All three stacks already carry a configurable string —
    Kuadrant's `response.unauthorized.message` in
    `kuadrant/deploy/policies/auth-policy.yaml`, and the equivalents for Envoy
    Gateway's `SecurityPolicy` and agentgateway's `AgentgatewayPolicy`. Turns a
    dead end into a retry.
-2. **Degrade instead of denying.** Give the router an entitlement-aware model
-   set so it never picks a class the caller cannot reach. This is the behaviour
+2. **Degrade instead of denying.** Give the router a tier-aware model set so it
+   never picks a tier the caller cannot reach. This is the behaviour
    most people assume `auto` already has. Needs the caller's identity at the
    router, which none of the three stacks passes to it today — unverified
    whether the vLLM Semantic Router v0.3.0 can take identity from a header.
@@ -66,7 +65,7 @@ cross-stack comparison row deliberately differs.
 
 agentgateway v1.4.1 has one external-processing slot per phase per target, so
 the semantic router holds the PreRouting slot for chat and resolves the model
-name that selects the pool *and* that the B300 authorization rule reads. Its
+name that selects the pool *and* that the tier-ceiling authorization reads. Its
 availability is therefore load-bearing in a way it is not on the other two
 stacks.
 
@@ -74,7 +73,7 @@ Measured with `kubectl -n ai-demo scale deployment/semantic-router --replicas=0`
 
 | | result |
 |---|---|
-| `FailOpen` | explicit chat 200, auto 404 — but an unentitled caller asking for `kimi-k3` **was served it**, because no filter could name the model for the authorization check |
+| `FailOpen` | explicit chat 200, auto 404 — but a medium-tier caller asking for `kimi-k3` **was served it**, because no filter could name the model for the authorization check |
 | `FailClosed` | all chat 500, no bypass; embeddings and reranking unaffected |
 
 `FailClosed` shipped, on the reasoning that BBR already carries it ("pool
@@ -86,7 +85,7 @@ elsewhere, breaking a contract that used to be identical in all three columns.
 Reversing is one word on the chat arm of
 `agentgateway/deploy/semantic-router/agentgateway-extproc.yaml`. Worth trying
 first: whether agentgateway's `traffic.authorization` CEL can reach the request
-body, which would let the B300 rule test `body.model` directly and close the
+body, which would let the tier rule test `body.model` directly and close the
 gap without losing availability. A `PostRouting` BBR pass was already tried and
 does not work — authorization does not see that filter's header mutation.
 

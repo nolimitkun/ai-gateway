@@ -1,0 +1,113 @@
+# Every model in this production profile is small-tier. Separate AuthPolicies
+# keep Keycloak reachable while applying the same tier ceiling to each route.
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata: {name: vllm-chat, namespace: ai-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-chat}
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader: {prefix: Bearer}
+    authorization:
+      small-tier:
+        patternMatching:
+          patterns:
+            - any:
+                - {selector: auth.identity.tier, operator: eq, value: big}
+                - {selector: auth.identity.tier, operator: eq, value: medium}
+                - {selector: auth.identity.tier, operator: eq, value: small}
+    response:
+      unauthenticated:
+        code: 401
+        message: {value: "a Keycloak access token is required"}
+      unauthorized:
+        code: 403
+        message: {value: "the token identity is not allowed to call this model tier"}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata: {name: vllm-rerank, namespace: ai-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-rerank}
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader: {prefix: Bearer}
+    authorization:
+      small-tier:
+        patternMatching:
+          patterns:
+            - any:
+                - {selector: auth.identity.tier, operator: eq, value: big}
+                - {selector: auth.identity.tier, operator: eq, value: medium}
+                - {selector: auth.identity.tier, operator: eq, value: small}
+    response:
+      unauthenticated:
+        code: 401
+        message: {value: "a Keycloak access token is required"}
+      unauthorized:
+        code: 403
+        message: {value: "the token identity is not allowed to call this model tier"}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata: {name: vllm-embedding, namespace: ai-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-embedding}
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader: {prefix: Bearer}
+    authorization:
+      small-tier:
+        patternMatching:
+          patterns:
+            - any:
+                - {selector: auth.identity.tier, operator: eq, value: big}
+                - {selector: auth.identity.tier, operator: eq, value: medium}
+                - {selector: auth.identity.tier, operator: eq, value: small}
+    response:
+      unauthenticated:
+        code: 401
+        message: {value: "a Keycloak access token is required"}
+      unauthorized:
+        code: 403
+        message: {value: "the token identity is not allowed to call this model tier"}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata: {name: vllm-transcription, namespace: ai-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-transcription}
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader: {prefix: Bearer}
+    authorization:
+      small-tier:
+        patternMatching:
+          patterns:
+            - any:
+                - {selector: auth.identity.tier, operator: eq, value: big}
+                - {selector: auth.identity.tier, operator: eq, value: medium}
+                - {selector: auth.identity.tier, operator: eq, value: small}
+    response:
+      unauthenticated:
+        code: 401
+        message: {value: "a Keycloak access token is required"}
+      unauthorized:
+        code: 403
+        message: {value: "the token identity is not allowed to call this model tier"}
