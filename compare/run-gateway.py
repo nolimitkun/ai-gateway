@@ -493,7 +493,38 @@ def run(cluster: str, sample_count: int) -> dict:
             spoof_code == 200
             and spoof_body.get("mock_accelerator") == "b300"
         )
-        result["model_body_routing"] = "4/4 pools; client header overwritten" if all(body_routes) and spoof_safe else "Failed"
+        # The routing header is not the only one a client can forge. Where a
+        # stack derives it from a header the semantic router sets, that header
+        # has to be trusted on the chat path only: nothing stops a client
+        # sending x-selected-model, and BBR does not strip it on the task
+        # paths. An unscoped copy sends a task request to a pool that does not
+        # serve its body model, which reads as an ordinary 404 or a silent
+        # fallback to the CPU fixture rather than as a routing defect.
+        selected_code, selected_body, _ = json_call(
+            cfg,
+            "/v1/rerank",
+            access_token,
+            {"model": "bge-reranker-v2-m3", "query": "gateway", "documents": ["a", "b"]},
+            {"x-selected-model": "qwen3-embedding-8b"},
+        )
+        selected_safe = (
+            selected_code == 200
+            and selected_body.get("mock_accelerator") == "l40s"
+        )
+        if all(body_routes) and spoof_safe and selected_safe:
+            result["model_body_routing"] = "4/4 pools; client headers overwritten"
+        else:
+            failed = []
+            if not all(body_routes):
+                failed.append("pool routing")
+            if not spoof_safe:
+                failed.append("x-gateway-model-name forgeable")
+            if not selected_safe:
+                failed.append(
+                    "x-selected-model steers task pools "
+                    f"(HTTP {selected_code}, pool {selected_body.get('mock_accelerator')})"
+                )
+            result["model_body_routing"] = "Failed: " + "; ".join(failed)
     else:
         result["model_body_routing"] = "Pools not installed"
 

@@ -372,6 +372,23 @@ def main():
                 "conditional; an unconditional rule wipes the header BBR writes for "
                 "embeddings and reranking"
             )
+        # Every arm that writes the routing header has to be scoped to chat.
+        # x-selected-model is a header the router sets, but a client can send
+        # it too and BBR does not strip it on the task paths, so an unscoped
+        # arm copies a client value over BBR's and the pool rules match it.
+        for arm in traffic.get("transformation", {}).get("conditional", []):
+            writes_router_header = any(
+                header.get("name") == "x-gateway-model-name"
+                for header in arm.get("policy", {}).get("request", {}).get("set", [])
+            )
+            condition = arm.get("condition", "")
+            if writes_router_header and "/v1/chat/completions" not in condition:
+                problems.append(
+                    f"agentgateway semantic policy '{name}' sets x-gateway-model-name "
+                    f"under a condition that is not scoped to the chat path "
+                    f"({condition!r}); on /v1/embeddings and /v1/rerank that overwrites "
+                    "the header BBR derived from the body with one the client sent"
+                )
 
     for problem in problems:
         print(problem, file=sys.stderr)

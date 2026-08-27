@@ -79,12 +79,12 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-26 16:52 (30 requests) | 2026-08-26 16:57 (30 requests) | 2026-08-27 07:39 (30 requests) |
+| Last isolated comparison (UTC) | 2026-08-27 14:48 (30 requests) | 2026-08-27 14:53 (30 requests) | 2026-08-27 09:29 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
 | Route rules | body.model + 12 pool rules | body.model + 12 pool rules | body.model + 12 pool rules |
-| OpenAI `body.model` to accelerator pool | 4/4 pools; client header overwritten | 4/4 pools; client header overwritten | 4/4 pools; client header overwritten |
+| OpenAI `body.model` to accelerator pool | 4/4 pools; client headers overwritten | 4/4 pools; client headers overwritten | 4/4 pools; client headers overwritten |
 | Endpoint-picker transport | TLS policy ready | Plaintext in local fixture | Plaintext in local fixture |
 | Workload replicas | 2/2 | 2/2 | 2/2 |
 | KServe-owned Deployments, Services, and Pool | 5 | 5 | 5 |
@@ -94,22 +94,22 @@ zero-delay Python runtime, not production performance benchmarks.
 | Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
 | Tiered chat models | big/medium/small | big/medium/small | big/medium/small |
 | Embeddings API | Yes | Yes | Yes |
-| RAG embedding models | No | Yes | Yes |
+| RAG embedding models | Yes | Yes | Yes |
 | Embedding dimension validation | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected |
 | Reranking API | Yes | Yes | Yes |
 | Speech-to-text API | Yes | Yes | Yes |
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
 | Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
 | Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
-| Local chat p50 | 74 ms | 44 ms | 55 ms |
+| Local chat p50 | 24 ms | 31 ms | 53 ms |
 | Policy objects reporting ready | 3/3 | 3/3 | 5/5 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
 | Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
-| Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; forged-header probe failed (HTTP 404, model None, upstream None) | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
+| Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
 | Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | b300 / h200 / h100 |
 | Decision headers returned to the client | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk |
-| Auto-routed chat p50 | 203 ms | 28 ms | 12 ms |
+| Auto-routed chat p50 | 28 ms | 24 ms | 19 ms |
 | Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 500 / auto 500 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
@@ -120,7 +120,7 @@ zero-delay Python runtime, not production performance benchmarks.
 | Same team name, different org | Denied (HTTP 403) | Denied (HTTP 403) | Denied (HTTP 403) |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
 | Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
-| Quota limit (3 per window) | 429 on request 1 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 1 of 6; shared bucket |
+| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
 | Nested org/team buckets (org 5, team 3) | unenforced: team A no 429 in 4; team B no 429 in 4; other org no 429 in 3 | nested: team A 429 on request 4 of 4; team B 429 on request 2 of 4; other org no 429 in 3 | Needs an external rate limit service |
 | Forged tenant header | HONOURED -- bucket escaped (HTTP 200) | Ignored (HTTP 429) | Not applicable without tenant buckets |
 | Tenant bucket across both routes | Single inference route | SEPARATE bucket per route -- ceiling doubled | Single inference route |

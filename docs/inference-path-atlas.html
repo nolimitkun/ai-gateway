@@ -796,11 +796,12 @@ footer {
           <p>Chat never reaches BBR, so the routing header comes from the router instead: <code>x-gateway-model-name := x-selected-model</code>. <code>transformation</code> is a different field from <code>extProc</code>, so it merges with the block above rather than replacing it.</p>
           <p>Verified on a live cluster that <code>extProc</code> runs <em>before</em> <code>transformation</code> within the phase &mdash; a probe transformation read a header the processor had just set.</p>
           <p>Conditional, with no fallback arm. An unconditional rule wipes the header BBR writes for the task paths; measured, <code>bge-m3</code> fell from the l40s pool back to the shared CPU fixture.</p>
+          <p><strong>Both arms are scoped to the chat path</strong>, not just the second. <code>x-selected-model</code> is a header the router sets, but nothing stops a client sending one, and BBR does not strip it on the task paths &mdash; see section 09.</p>
         </div>
         <div class="delta">
-          <div class="r"><span class="sig">~</span><span class="k">x-gateway-model-name := request.headers["x-selected-model"]</span></div>
+          <div class="r"><span class="sig">~</span><span class="k">POST /v1/chat/completions + x-selected-model → x-gateway-model-name</span></div>
           <div class="c"><span class="sig"> </span>chat with no selection → header cleared, so a forged value cannot survive</div>
-          <div class="c"><span class="sig"> </span>tasks → untouched, BBR's header preserved</div>
+          <div class="c"><span class="sig"> </span>tasks → neither arm matches, BBR's header preserved</div>
         </div>
       </div>
     </li>
@@ -1311,6 +1312,53 @@ footer {
   <p>The object in the cluster had one <code>HTTP_ROUTE</code> patch; the file in the branch has six. The cluster copy predated the change and had never been re-applied. With the override missing, the forged header steered the first match onto <code>model-qwen3-8-27b</code>, where the router was disabled by the virtual-host default; <code>model: auto</code> then reached BBR untouched, no rule matched <code>auto</code>, the fallback route carried the literal string upstream, and the fixture answered 404 for a model it does not serve.</p>
 
   <p>Re-applying the manifest and re-running the exact probe returned <span class="mono">HTTP 200, model kimi-k3, upstream kimi-k3</span>. The manifests were right the whole time; the retained cluster was stale.</p>
+
+  <h3>A second trusted header that wasn&rsquo;t</h3>
+  <p>Automated review on the pull request raised a P2 against the transformation above, and it was right. The first arm originally read:</p>
+
+  <div class="delta" style="border:1px solid var(--rule); border-radius:3px; margin-bottom:20px">
+    <div class="x"><span class="sig">✕</span><span class="k">- condition: '"x-selected-model" in request.headers'</span></div>
+    <div class="a"><span class="sig">✓</span><span class="k">- condition: 'request.method == "POST" &amp;&amp;
+                request.path == "/v1/chat/completions" &amp;&amp;
+                "x-selected-model" in request.headers'</span></div>
+  </div>
+
+  <p>The reasoning behind the original was that <code>x-selected-model</code> comes from the semantic router, and the router overwrites a client-supplied value &mdash; which is measured and true. But that only holds on the chat path, because chat is the only path the router runs on. On <code>/v1/embeddings</code> and <code>/v1/rerank</code> the request goes to BBR instead, and BBR sets <code>x-gateway-model-name</code> from the body without stripping an unrelated inbound header. The unscoped arm then copied the client&rsquo;s value straight over BBR&rsquo;s.</p>
+
+  <p>Reproduced before fixing, in both directions:</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Request</th><th>Forged header</th><th>Before</th><th>After</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="lab"><span class="m">/v1/rerank<br>bge-reranker-v2-m3</span></td>
+          <td><span class="m">x-selected-model:<br>qwen3-embedding-8b</span></td>
+          <td class="bad"><span class="m">served by the CPU<br>fixture, not l40s</span></td>
+          <td class="good"><span class="m">l40s</span></td>
+        </tr>
+        <tr>
+          <td class="lab"><span class="m">/v1/embeddings<br>bge-m3</span></td>
+          <td><span class="m">x-selected-model:<br>qwen3-embedding-8b</span></td>
+          <td class="bad"><span class="m">404 &mdash; reached h100,<br>which does not serve it</span></td>
+          <td class="good"><span class="m">l40s</span></td>
+        </tr>
+        <tr>
+          <td class="lab"><span class="m">/v1/embeddings<br>qwen3-embedding-8b</span></td>
+          <td><span class="m">x-selected-model:<br>bge-m3</span></td>
+          <td class="bad"><span class="m">left the h100 pool</span></td>
+          <td class="good"><span class="m">h100</span></td>
+        </tr>
+      </tbody>
+      <caption>A client choosing its own accelerator pool &mdash; the exact thing the shared route contract exists to prevent.</caption>
+    </table>
+  </div>
+
+  <p>Not a privilege escalation: the B300 authorization rule reads <code>x-gateway-model-name</code>, and forging a big-tier value into it gets the caller denied rather than admitted. The damage is misrouting, and it reads as an ordinary 404 or a quiet fallback to the CPU fixture rather than as a routing defect.</p>
+
+  <p>The pattern is worth naming, because it is the third time in this page: <strong>a header is only trustworthy on the path where the thing that sets it actually runs.</strong> Guarded now in two places &mdash; the offline validator rejects any transformation arm that writes the routing header without being scoped to chat, and the comparison sends a forged <code>x-selected-model</code> at <code>/v1/rerank</code> on every run, on all three stacks.</p>
 
   <div class="callout">
     <span class="tag">Worth keeping</span>

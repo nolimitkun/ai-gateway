@@ -122,7 +122,22 @@ spec:
         # forged header from downgrading the authorization check -- measured,
         # an unentitled caller forging `x-gateway-model-name: mock-kserve`
         # while asking for kimi-k3 still gets 403.
-        - condition: '"x-selected-model" in request.headers'
+        #
+        # The path and method belong in this condition, not just the one
+        # below. `x-selected-model` is a header the router sets, but nothing
+        # stops a client sending it, and BBR does not strip it on the task
+        # paths. Without the guard this arm copies that client value over the
+        # header BBR just derived from the body, and the pool rules match it:
+        # measured, a rerank for bge-reranker-v2-m3 carrying
+        # `x-selected-model: qwen3-embedding-8b` left the l40s pool and was
+        # served by the CPU fixture, and the embeddings equivalent reached the
+        # h100 pool, which answered 404 for a model it does not serve. Chat is
+        # the only path where this header is trustworthy, because it is the
+        # only path where the router runs and overwrites it.
+        - condition: >-
+            request.method == "POST" &&
+            request.path == "/v1/chat/completions" &&
+            "x-selected-model" in request.headers
           policy:
             request:
               set:
