@@ -33,6 +33,8 @@ CONFIG = STACK_ROOTS[0] / "semantic-router" / "router-config.yaml"
 COMPARISON = ROOT / "compare" / "run-gateway.py"
 POOL_ROUTE = STACK_ROOTS[0] / "kserve" / "pools" / "route.yaml"
 KUADRANT_ROUTER = STACK_ROOTS[0] / "semantic-router" / "kuadrant-extproc.yaml"
+AGENT_ROUTER = STACK_ROOTS[2] / "semantic-router" / "agentgateway-extproc.yaml"
+AGENT_BBR = STACK_ROOTS[2] / "llm-d" / "agentgateway-extproc.yaml"
 
 SHARED_COMPONENTS = (
     "kserve/controller-values.yaml",
@@ -307,6 +309,86 @@ def main():
             "Kuadrant semantic routing is missing chat route sections: "
             + ", ".join(missing_semantic_routes)
         )
+
+    # agentgateway has one ext_proc slot per phase per target, so the semantic
+    # attachment has to take over the pre-routing slot and hand its choice to
+    # the router table through a header. A route-attached router still picks
+    # the right model and is served from whatever pool the pre-routing header
+    # already selected -- measured as `auto_pools: all / all / all` while every
+    # other stack reported the accelerator pools. None of that fails loudly, so
+    # it is checked here.
+    agent_policies = [
+        document
+        for document in yaml.safe_load_all(AGENT_ROUTER.read_text(encoding="utf-8"))
+        if document and document.get("kind") == "AgentgatewayPolicy"
+    ]
+    base_names = {
+        document["metadata"]["name"]
+        for document in yaml.safe_load_all(AGENT_BBR.read_text(encoding="utf-8"))
+        if document and document.get("kind") == "AgentgatewayPolicy"
+    }
+    if len(agent_policies) != 1:
+        problems.append(
+            "agentgateway semantic attachment must be exactly one policy; "
+            f"found {len(agent_policies)}. Two policies setting traffic.extProc "
+            "merge field-level, and the loser is dropped without a status condition"
+        )
+    for policy in agent_policies:
+        traffic = policy.get("spec", {}).get("traffic", {})
+        name = policy["metadata"]["name"]
+        if name not in base_names:
+            problems.append(
+                f"agentgateway semantic policy '{name}' does not replace the base "
+                f"body-based-router policy ({', '.join(sorted(base_names))}); both "
+                "would attach and only one would run"
+            )
+        if traffic.get("phase") != "PreRouting":
+            problems.append(
+                f"agentgateway semantic policy '{name}' must set phase: PreRouting, "
+                "or its model choice lands after the route is already selected"
+            )
+        if any(
+            ref.get("kind") != "Gateway"
+            for ref in policy.get("spec", {}).get("targetRefs", [])
+        ):
+            problems.append(
+                f"agentgateway semantic policy '{name}' must target the Gateway; "
+                "PreRouting policies may only target a Gateway or Listener"
+            )
+        written = {
+            header.get("name")
+            for arm in traffic.get("transformation", {}).get("conditional", [])
+            for header in arm.get("policy", {}).get("request", {}).get("set", [])
+        }
+        if "x-gateway-model-name" not in written:
+            problems.append(
+                f"agentgateway semantic policy '{name}' must set x-gateway-model-name "
+                "from the router's x-selected-model; without it the pool rules "
+                "never match and every chat request falls back to the CPU fixture"
+            )
+        if not traffic.get("transformation", {}).get("conditional"):
+            problems.append(
+                f"agentgateway semantic policy '{name}' must keep the transformation "
+                "conditional; an unconditional rule wipes the header BBR writes for "
+                "embeddings and reranking"
+            )
+        # Every arm that writes the routing header has to be scoped to chat.
+        # x-selected-model is a header the router sets, but a client can send
+        # it too and BBR does not strip it on the task paths, so an unscoped
+        # arm copies a client value over BBR's and the pool rules match it.
+        for arm in traffic.get("transformation", {}).get("conditional", []):
+            writes_router_header = any(
+                header.get("name") == "x-gateway-model-name"
+                for header in arm.get("policy", {}).get("request", {}).get("set", [])
+            )
+            condition = arm.get("condition", "")
+            if writes_router_header and "/v1/chat/completions" not in condition:
+                problems.append(
+                    f"agentgateway semantic policy '{name}' sets x-gateway-model-name "
+                    f"under a condition that is not scoped to the chat path "
+                    f"({condition!r}); on /v1/embeddings and /v1/rerank that overwrites "
+                    "the header BBR derived from the body with one the client sent"
+                )
 
     for problem in problems:
         print(problem, file=sys.stderr)

@@ -25,6 +25,17 @@ route cache. A header-specific `HTTPRoute` rule then selects the model's KServe
 pool, and that pool's llm-d endpoint picker selects a replica. BBR overwrites a
 client-forged internal header; clients never choose an accelerator header.
 
+[docs/inference-path-atlas.html](docs/inference-path-atlas.html) traces one chat
+completion through all three stacks hop by hop -- every filter in the order it
+actually runs, the object that put it there, and the header and body deltas,
+read from `/config_dump` on the running proxies rather than from these
+manifests. Open it in a browser; it is self-contained.
+
+[docs/open-questions.md](docs/open-questions.md) lists the decisions this
+repository has deferred -- places where the current behaviour was a side effect
+rather than a choice, or where a gap could be closed and has not been. It is
+separate from the comparison table, which records what each stack does.
+
 ## Gateway comparison
 
 This is the canonical gateway comparison. Other tables in this README describe
@@ -73,12 +84,12 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-26 16:52 (30 requests) | 2026-08-26 16:57 (30 requests) | 2026-08-27 06:10 (30 requests) |
+| Last isolated comparison (UTC) | 2026-08-27 14:48 (30 requests) | 2026-08-27 14:53 (30 requests) | 2026-08-27 09:29 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
 | Route rules | body.model + 12 pool rules | body.model + 12 pool rules | body.model + 12 pool rules |
-| OpenAI `body.model` to accelerator pool | 4/4 pools; client header overwritten | 4/4 pools; client header overwritten | 4/4 pools; client header overwritten |
+| OpenAI `body.model` to accelerator pool | 4/4 pools; client headers overwritten | 4/4 pools; client headers overwritten | 4/4 pools; client headers overwritten |
 | Endpoint-picker transport | TLS policy ready | Plaintext in local fixture | Plaintext in local fixture |
 | Workload replicas | 2/2 | 2/2 | 2/2 |
 | KServe-owned Deployments, Services, and Pool | 5 | 5 | 5 |
@@ -88,23 +99,23 @@ zero-delay Python runtime, not production performance benchmarks.
 | Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
 | Tiered chat models | big/medium/small | big/medium/small | big/medium/small |
 | Embeddings API | Yes | Yes | Yes |
-| RAG embedding models | No | Yes | Yes |
+| RAG embedding models | Yes | Yes | Yes |
 | Embedding dimension validation | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected |
 | Reranking API | Yes | Yes | Yes |
 | Speech-to-text API | Yes | Yes | Yes |
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
 | Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
 | Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
-| Local chat p50 | 74 ms | 44 ms | 58 ms |
+| Local chat p50 | 24 ms | 31 ms | 53 ms |
 | Policy objects reporting ready | 3/3 | 3/3 | 5/5 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
 | Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
-| Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; forged-header probe failed (HTTP 404, model None, upstream None) | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
+| Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
-| Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | all / all / all |
+| Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | b300 / h200 / h100 |
 | Decision headers returned to the client | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk |
-| Auto-routed chat p50 | 203 ms | 28 ms | 53 ms |
-| Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored |
+| Auto-routed chat p50 | 28 ms | 24 ms | 19 ms |
+| Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 500 / auto 500 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
 | Authentication across models/chat/embed/rerank/STT | 5/5 denied / 5/5 allowed | 5/5 denied / 5/5 allowed | 5/5 denied / 5/5 allowed |
@@ -114,7 +125,7 @@ zero-delay Python runtime, not production performance benchmarks.
 | Same team name, different org | Denied (HTTP 403) | Denied (HTTP 403) | Denied (HTTP 403) |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
 | Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
-| Quota limit (3 per window) | 429 on request 1 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
+| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
 | Nested org/team buckets (org 5, team 3) | unenforced: team A no 429 in 4; team B no 429 in 4; other org no 429 in 3 | nested: team A 429 on request 4 of 4; team B 429 on request 2 of 4; other org no 429 in 3 | Needs an external rate limit service |
 | Forged tenant header | HONOURED -- bucket escaped (HTTP 200) | Ignored (HTTP 429) | Not applicable without tenant buckets |
 | Tenant bucket across both routes | Single inference route | SEPARATE bucket per route -- ceiling doubled | Single inference route |
@@ -454,9 +465,9 @@ flowchart TB
       AZ["AgentgatewayPolicy<br/>member + B300 authorization"] -.-> GW
       RL["AgentgatewayPolicy<br/>local request/quota counters"] -.-> GW
       CORS["AgentgatewayPolicy<br/>CORS"] -.-> GW
-      EP["AgentgatewayPolicy extProc<br/>semantic chat processor"] -.-> GW
+      EP["AgentgatewayPolicy PreRouting<br/>chat: semantic, tasks: BBR<br/>+ transformation to routing header"] -.-> GW
       SR["semantic-router 0.3.0<br/>gRPC ext_proc :50051"] <-->|"chat rewrite"| EP
-      BP["AgentgatewayPolicy PreRouting<br/>JSON task BBR"] -.-> GW
+      BP["same policy, task arm"] -.-> GW
       BBR["BBR 1.2.1<br/>body.model → internal header"] <-->|"TLS ext_proc :9004"| BP
       AGB["AgentgatewayBackend<br/>HTTP/2 TLS"] -.-> BBR
       P --> EPP["llm-d EPP/scheduler"] --> PODS["2 mock model pods"]
@@ -483,7 +494,7 @@ flowchart TB
 | Security | Separate `AgentgatewayPolicy` resources for Keycloak JWT, group membership, B300 authorization, and CORS |
 | Limits | In-process local request/minute and quota/hour counters, shared per proxy; global mode is required for durable keyed windows |
 | Token boundary | Generic KServe `InferencePool` does not publish agentgateway AI-backend tokenization metadata, so token units are reported unavailable |
-| Model-to-pool routing | Gateway-scoped PreRouting BBR uses a native `AgentgatewayBackend` with HTTP/2 TLS and handles chat, embedding, and rerank JSON bodies |
+| Model-to-pool routing | Gateway-scoped PreRouting BBR uses a native `AgentgatewayBackend` with HTTP/2 TLS and handles chat, embedding, and rerank JSON bodies; with the semantic router installed it keeps the task paths and the router takes chat |
 | Semantic routing | Route-scoped semantic ext_proc runs after PreRouting BBR in v1.4.1: selection works, but `auto` stays on shared pool `all`; explicit models reach accelerator pools |
 | KServe connection | Body-derived route rule → KServe `InferencePool` → EPP → model pods |
 | Deep live evidence | 30-request routing sample; four explicit body-routed pools; five APIs; JWT/authz; shared local rate/quota; CORS allow/reject; ext_proc scope/fail-open |
@@ -865,7 +876,7 @@ curl "$BASE/v1/chat/completions" -H 'content-type: application/json' \
 |---|---|---|
 | OpenShift profile | Istio `EnvoyFilter` inserting `envoy.filters.http.ext_proc` into the gateway listener | None; `EnvoyFilter` has no status |
 | Envoy AI Gateway | `EnvoyExtensionPolicy` `extProc` targeting the `HTTPRoute` | `Accepted` |
-| agentgateway | `AgentgatewayPolicy` `traffic.extProc` targeting the `HTTPRoute` | `Accepted` |
+| agentgateway | `AgentgatewayPolicy` `traffic.extProc` in `PreRouting`, replacing the base BBR policy | `Accepted` |
 
 Pool routing adds a second external processor. On Kuadrant and Envoy it runs
 after semantic selection, so `model:auto` is converted to the selected model
@@ -873,19 +884,35 @@ and then reaches that model's pool. Because Envoy chooses an initial route
 before either processor runs, both attachments enable semantic processing on
 the base chat section and every model-specific chat section. The comparison
 also sends `model:auto` with a contradictory internal header and requires the
-semantic decision to win. agentgateway 1.4.1 runs gateway-scoped BBR in
-`PreRouting` before the route-scoped semantic processor; explicit models still
-route correctly, while `auto` remains on the shared pool. The live table
-records this as `b300/h200/h100` versus `all/all/all`.
+semantic decision to win.
+
+agentgateway reaches the same result by a different route, because it cannot
+chain two processors. `traffic.extProc` is a single object -- one `backendRef`,
+or a `conditional` list the CRD defines as first-match-wins -- and a second
+policy setting the same field merges field-level and replaces the first rather
+than chaining. Both policies still report `Accepted` and `Attached`; the loser
+simply never runs. So the semantic attachment takes the pre-routing slot for
+chat, leaves BBR on the JSON task paths, and hands its choice to the route
+table through a `transformation` that copies `x-selected-model` into
+`x-gateway-model-name`. Within `PreRouting`, `extProc` runs before
+`transformation`, which is what makes that copy see a header the processor just
+set.
 
 The OpenShift profile is the outlier: Kuadrant has no external-processing
 policy and Istio's Gateway API support does not cover ext_proc either, so the
 filter is written in Envoy's own field names and patched into the listener,
 with no controller status to confirm it was accepted. A `DestinationRule`
 disables mesh mTLS toward the router, which otherwise fails the handshake — and
-because the filter fails open, would leave every request silently unrouted. All
-three attachments fail open by design: a router that is down leaves inference
-working with the client's original model.
+because the filter fails open, would leave every request silently unrouted. Two of the three attachments fail open by design: a router that is down leaves
+inference working with the client's original model. agentgateway is the
+exception, and not by preference. There the router owns the pre-routing slot,
+so it resolves the model name that selects the pool *and* that the B300
+authorization rule reads; a fail-open outage leaves no filter able to name the
+model. Measured with the router scaled to zero, `FailOpen` served an
+unentitled caller the big-tier model it asked for, while explicit chat kept
+working. `FailClosed` costs the availability instead, and the
+`Semantic router unavailable` row reports the difference rather than hiding
+it: `explicit 500 / auto 500` against `explicit 200 / auto 404` elsewhere.
 
 ### Decisions are keyword rules, not the classifier
 
@@ -1113,6 +1140,7 @@ kserve/production/          arbitrary-context production vLLM compatibility bund
 mock-llm/                  deterministic multi-task CPU runtime and tests
 scripts/                   installation, deployment, validation, and lifecycle commands
 compare/                   three-gateway comparison and raw results
+docs/                      request-path walkthrough and the deferred-decision list
 ```
 
 ## References

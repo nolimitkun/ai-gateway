@@ -138,7 +138,16 @@ case "$ctx" in
   kind-ai-gw-agent)
     kubectl --context "$ctx" -n ai-demo delete \
       agentgatewaypolicy/body-based-router-tls --ignore-not-found
+    # This file carries the AgentgatewayBackend as well as the base policy, so
+    # it is applied either way; the semantic chain then replaces the policy.
     kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/agentgateway-extproc.yaml"
+    # Preserve the optional semantic-router chain during an idempotent KServe
+    # reconcile. It replaces model-body-router under the same name, so
+    # re-applying the base file above would silently undo it and send `auto`
+    # back to the CPU fixture.
+    if kubectl --context "$ctx" -n ai-demo get deployment semantic-router >/dev/null 2>&1; then
+      kubectl --context "$ctx" apply -f "$SEMANTIC_MANIFESTS/agentgateway-extproc.yaml"
+    fi
     wait_for_policy "$ctx" agentgatewaypolicy/model-body-router
     ;;
 esac
