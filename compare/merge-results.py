@@ -46,6 +46,7 @@ ROWS = (
     ("Verified identity headers at model pod", "identity_headers"),
     ("Authorization: guest / non-admin B300 / admin B300", "authorization"),
     ("Team entitlement to the B300 class", "team_entitlement"),
+    ("Same team name, different org", "cross_org_entitlement"),
     ("Request rate limit (5 per minute)", "request_limit"),
     ("Rate-limit bucket isolation", "rate_scope"),
     ("Quota limit (3 per window)", "quota_limit"),

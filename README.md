@@ -73,7 +73,7 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-26 16:18 (30 requests) | 2026-08-26 16:04 (30 requests) | 2026-08-26 15:39 (30 requests) |
+| Last isolated comparison (UTC) | 2026-08-26 16:52 (30 requests) | 2026-08-26 16:57 (30 requests) | 2026-08-27 06:10 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
@@ -83,19 +83,19 @@ zero-delay Python runtime, not production performance benchmarks.
 | Workload replicas | 2/2 | 2/2 | 2/2 |
 | KServe-owned Deployments, Services, and Pool | 5 | 5 | 5 |
 | Latest routing sample | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods |
-| Streaming usage chunk | No | Yes | Yes |
-| Streaming `[DONE]` termination | No | Yes | Yes |
+| Streaming usage chunk | Yes | Yes | Yes |
+| Streaming `[DONE]` termination | Yes | Yes | Yes |
 | Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
 | Tiered chat models | big/medium/small | big/medium/small | big/medium/small |
 | Embeddings API | Yes | Yes | Yes |
-| RAG embedding models | Yes | Yes | Yes |
+| RAG embedding models | No | Yes | Yes |
 | Embedding dimension validation | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected |
 | Reranking API | Yes | Yes | Yes |
 | Speech-to-text API | Yes | Yes | Yes |
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
 | Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
 | Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
-| Local chat p50 | 52 ms | 31 ms | 54 ms |
+| Local chat p50 | 74 ms | 44 ms | 58 ms |
 | Policy objects reporting ready | 3/3 | 3/3 | 5/5 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
 | Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
@@ -103,7 +103,7 @@ zero-delay Python runtime, not production performance benchmarks.
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
 | Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | all / all / all |
 | Decision headers returned to the client | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk |
-| Auto-routed chat p50 | 35 ms | 30 ms | 18 ms |
+| Auto-routed chat p50 | 203 ms | 28 ms | 53 ms |
 | Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
@@ -111,9 +111,10 @@ zero-delay Python runtime, not production performance benchmarks.
 | Verified identity headers at model pod | x-auth-plan=gold, x-auth-user=alice | x-auth-plan=gold, x-user-id=alice | Not configured |
 | Authorization: guest / non-admin B300 / admin B300 | 403 / 403 / 200 | 403 / 403 / 200 | 403 / 403 / 200 |
 | Team entitlement to the B300 class | unentitled 403 / entitled 200 | unentitled 403 / entitled 200 | unentitled 403 / entitled 200 |
+| Same team name, different org | Denied (HTTP 403) | Denied (HTTP 403) | Denied (HTTP 403) |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
 | Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
-| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
+| Quota limit (3 per window) | 429 on request 1 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
 | Nested org/team buckets (org 5, team 3) | unenforced: team A no 429 in 4; team B no 429 in 4; other org no 429 in 3 | nested: team A 429 on request 4 of 4; team B 429 on request 2 of 4; other org no 429 in 3 | Needs an external rate limit service |
 | Forged tenant header | HONOURED -- bucket escaped (HTTP 200) | Ignored (HTTP 429) | Not applicable without tenant buckets |
 | Tenant bucket across both routes | Single inference route | SEPARATE bucket per route -- ceiling doubled | Single inference route |
@@ -687,6 +688,7 @@ gateway endpoint as inference traffic.
 | `carol` | `carol` | `model-users`, `/acme/research` | Gold | B300 by team entitlement |
 | `dave` | `dave` | `model-users`, `/acme/support` | Gold | Everything except B300 |
 | `erin` | `erin` | `model-users`, `/globex/platform` | Free | Everything except B300 |
+| `frank` | `frank` | `model-users`, `/globex/research` | Free | Everything except B300 — same team name as `carol`, different org |
 
 ```bash
 BASE=http://localhost:8082
@@ -731,6 +733,21 @@ each engine, and both shapes have a trap:
 |---|---|---|
 | Kuadrant, agentgateway | Cumulative — every rule must pass | A new rule can only *subtract* access. Widening to an entitled team means editing the rule that already denies |
 | Envoy Gateway | First match wins | A new rule can only be reached if it is *prepended*. Appended below an existing `Allow`, an entitlement is dead code |
+
+An entitlement also has to name the org, not just the team. Team names are
+only unique inside their org, so `team == research` grants the B300 class to a
+`research` team in *every* org — a tenant boundary crossed by a name collision
+rather than by a grant. Each stack spells the binding differently: Envoy
+matches the `org` and `team` claims as a pair, agentgateway matches the
+`/acme/research` group path, and Kuadrant nests an `all` inside the `any` so
+that the admin arm stays a real OR (admins carry no `org` claim, and hoisting
+the org test up to `patterns`, which ANDs, would lock them out).
+
+`frank` exists to keep that honest: he is `/globex/research`, the same team
+name as `carol` in a different org. The `Same team name, different org` row
+sends his token at the B300 class, and Kuadrant granted it until the org was
+bound. `make validate` now rejects an entitlement that names the team without
+the org in any of the three policies.
 
 **Limits** nest by intersection: org, team and user counters are all charged
 for the same request, and whichever empties first returns the 429. Team caps

@@ -656,6 +656,17 @@ def run(cluster: str, sample_count: int) -> dict:
         carol_big, _, _ = json_call(cfg, "/v1/chat/completions", token(cfg, "carol"), BIG_CHAT)
         dave_big, _, _ = json_call(cfg, "/v1/chat/completions", token(cfg, "dave"), BIG_CHAT)
         result["team_entitlement"] = f"unentitled {dave_big} / entitled {carol_big}"
+        # The same team name in a different org. Frank is /globex/research and
+        # carol is /acme/research, so a rule that grants on the team name alone
+        # cannot tell them apart -- the entitlement leaks to every org that
+        # happens to use the name. Nothing about the gateway looks wrong when
+        # it does, and the row above still reads correctly, which is why this
+        # is a probe of its own.
+        frank_big, _, _ = json_call(cfg, "/v1/chat/completions", token(cfg, "frank"), BIG_CHAT)
+        result["cross_org_entitlement"] = {
+            403: "Denied (HTTP 403)",
+            200: "GRANTED -- entitlement leaked across orgs (HTTP 200)",
+        }.get(frank_big, f"Inconclusive (HTTP {frank_big})")
         if cluster == "ai-gw-agent":
             result.update({
                 "tenant_nesting": "Needs an external rate limit service",
@@ -671,7 +682,7 @@ def run(cluster: str, sample_count: int) -> dict:
         else:
             result["token_limit"] = probe_limit(cfg, access_token, ("x-token-limit-probe", "true"), 6, BIG_CHAT)
     else:
-        for key in ("authentication", "task_authentication", "identity_headers", "authorization", "team_entitlement", "request_limit", "rate_scope", "quota_limit", "tenant_nesting", "tenant_header_spoof", "tenant_route_scope", "token_limit"):
+        for key in ("authentication", "task_authentication", "identity_headers", "authorization", "team_entitlement", "cross_org_entitlement", "request_limit", "rate_scope", "quota_limit", "tenant_nesting", "tenant_header_spoof", "tenant_route_scope", "token_limit"):
             result[key] = "No policy" if not policies_present else "Token error"
 
     code, _, cors_headers = request(

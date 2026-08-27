@@ -5,30 +5,64 @@
   "registrationAllowed": false,
   "accessTokenLifespan": 3600,
   "groups": [
-    { "name": "platform-admins" },
-    { "name": "model-users" },
-    { "name": "guests" },
+    {
+      "name": "platform-admins"
+    },
+    {
+      "name": "model-users"
+    },
+    {
+      "name": "guests"
+    },
     {
       "name": "acme",
-      "attributes": { "tier": ["enterprise"] },
+      "attributes": {
+        "tier": [
+          "enterprise"
+        ]
+      },
       "subGroups": [
         {
           "name": "research",
-          "attributes": { "allowed-classes": ["b300,h200"] }
+          "attributes": {
+            "allowed-classes": [
+              "b300,h200"
+            ]
+          }
         },
         {
           "name": "support",
-          "attributes": { "allowed-classes": ["l40s"] }
+          "attributes": {
+            "allowed-classes": [
+              "l40s"
+            ]
+          }
         }
       ]
     },
     {
       "name": "globex",
-      "attributes": { "tier": ["free"] },
+      "attributes": {
+        "tier": [
+          "free"
+        ]
+      },
       "subGroups": [
         {
           "name": "platform",
-          "attributes": { "allowed-classes": ["h100"] }
+          "attributes": {
+            "allowed-classes": [
+              "h100"
+            ]
+          }
+        },
+        {
+          "name": "research",
+          "attributes": {
+            "allowed-classes": [
+              "h100"
+            ]
+          }
         }
       ]
     }
@@ -141,7 +175,9 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
-      "defaultClientScopes": ["ai-gateway-claims"],
+      "defaultClientScopes": [
+        "ai-gateway-claims"
+      ],
       "optionalClientScopes": []
     }
   ],
@@ -153,10 +189,21 @@
       "firstName": "Alice",
       "lastName": "Admin",
       "email": "alice@example.com",
-      "attributes": { "plan": ["gold"] },
-      "groups": ["/platform-admins", "/model-users"],
+      "attributes": {
+        "plan": [
+          "gold"
+        ]
+      },
+      "groups": [
+        "/platform-admins",
+        "/model-users"
+      ],
       "credentials": [
-        { "type": "password", "value": "alice", "temporary": false }
+        {
+          "type": "password",
+          "value": "alice",
+          "temporary": false
+        }
       ]
     },
     {
@@ -166,10 +213,20 @@
       "firstName": "Bob",
       "lastName": "Builder",
       "email": "bob@example.com",
-      "attributes": { "plan": ["free"] },
-      "groups": ["/model-users"],
+      "attributes": {
+        "plan": [
+          "free"
+        ]
+      },
+      "groups": [
+        "/model-users"
+      ],
       "credentials": [
-        { "type": "password", "value": "bob", "temporary": false }
+        {
+          "type": "password",
+          "value": "bob",
+          "temporary": false
+        }
       ]
     },
     {
@@ -179,10 +236,20 @@
       "firstName": "Mallory",
       "lastName": "Guest",
       "email": "mallory@example.com",
-      "attributes": { "plan": ["free"] },
-      "groups": ["/guests"],
+      "attributes": {
+        "plan": [
+          "free"
+        ]
+      },
+      "groups": [
+        "/guests"
+      ],
       "credentials": [
-        { "type": "password", "value": "mallory", "temporary": false }
+        {
+          "type": "password",
+          "value": "mallory",
+          "temporary": false
+        }
       ]
     },
     {
@@ -193,13 +260,26 @@
       "lastName": "Researcher",
       "email": "carol@acme.example.com",
       "attributes": {
-        "plan": ["gold"],
-        "org": ["acme"],
-        "team": ["research"]
+        "plan": [
+          "gold"
+        ],
+        "org": [
+          "acme"
+        ],
+        "team": [
+          "research"
+        ]
       },
-      "groups": ["/model-users", "/acme/research"],
+      "groups": [
+        "/model-users",
+        "/acme/research"
+      ],
       "credentials": [
-        { "type": "password", "value": "carol", "temporary": false }
+        {
+          "type": "password",
+          "value": "carol",
+          "temporary": false
+        }
       ]
     },
     {
@@ -210,13 +290,26 @@
       "lastName": "Support",
       "email": "dave@acme.example.com",
       "attributes": {
-        "plan": ["gold"],
-        "org": ["acme"],
-        "team": ["support"]
+        "plan": [
+          "gold"
+        ],
+        "org": [
+          "acme"
+        ],
+        "team": [
+          "support"
+        ]
       },
-      "groups": ["/model-users", "/acme/support"],
+      "groups": [
+        "/model-users",
+        "/acme/support"
+      ],
       "credentials": [
-        { "type": "password", "value": "dave", "temporary": false }
+        {
+          "type": "password",
+          "value": "dave",
+          "temporary": false
+        }
       ]
     },
     {
@@ -227,13 +320,56 @@
       "lastName": "Platform",
       "email": "erin@globex.example.com",
       "attributes": {
-        "plan": ["free"],
-        "org": ["globex"],
-        "team": ["platform"]
+        "plan": [
+          "free"
+        ],
+        "org": [
+          "globex"
+        ],
+        "team": [
+          "platform"
+        ]
       },
-      "groups": ["/model-users", "/globex/platform"],
+      "groups": [
+        "/model-users",
+        "/globex/platform"
+      ],
       "credentials": [
-        { "type": "password", "value": "erin", "temporary": false }
+        {
+          "type": "password",
+          "value": "erin",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "frank",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Frank",
+      "lastName": "Research",
+      "email": "frank@globex.example.com",
+      "attributes": {
+        "plan": [
+          "free"
+        ],
+        "org": [
+          "globex"
+        ],
+        "team": [
+          "research"
+        ]
+      },
+      "groups": [
+        "/model-users",
+        "/globex/research"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "frank",
+          "temporary": false
+        }
       ]
     }
   ]

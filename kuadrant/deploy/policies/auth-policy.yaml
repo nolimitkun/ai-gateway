@@ -41,11 +41,24 @@ spec:
       # there, so widening is a prepend and it is the restriction that risks
       # becoming unreachable.
       #
-      # The entitled arm reads the scalar `team` claim rather than the group
-      # path, matching how the other rules here are written. Authorino also
-      # accepts a CEL `predicate`, which could test the path claim as a
-      # subtree the way agentgateway does; the selector form is used because
-      # it is the mechanism the rest of this policy already proves out.
+      # The entitled arm reads the scalar `org` and `team` claims rather than
+      # the group path, matching how the other rules here are written.
+      # Authorino also accepts a CEL `predicate`, which could test the path
+      # claim as a subtree the way agentgateway does; the selector form is
+      # used because it is the mechanism the rest of this policy already
+      # proves out.
+      #
+      # Both claims, not just `team`. A team name is only unique within its
+      # org, so matching `team == research` alone entitles a `research` team
+      # in *any* org -- a tenant boundary crossed by a name collision rather
+      # than by a grant. Envoy binds the pair as two claim matches and
+      # agentgateway binds it as the `/acme/research` path; this is the same
+      # intent in Authorino's shape. `all` nested inside `any` is what keeps
+      # the admin arm a genuine OR: admins carry no `org` claim, so hoisting
+      # the org test up to `patterns` -- which ANDs -- would lock them out.
+      # The realm carries a `/globex/research` team and the user frank for
+      # exactly this case; before the org was bound, frank reached the B300
+      # class here while the other two stacks denied him.
       kimi-k3-needs-admin-or-entitled-team:
         when:
           - selector: request.headers.x-gateway-model-name
@@ -57,9 +70,13 @@ spec:
                 - selector: auth.identity.groups
                   operator: incl
                   value: platform-admins
-                - selector: auth.identity.team
-                  operator: eq
-                  value: research
+                - all:
+                    - selector: auth.identity.org
+                      operator: eq
+                      value: acme
+                    - selector: auth.identity.team
+                      operator: eq
+                      value: research
       glm-5-3-needs-admin-or-entitled-team:
         when:
           - selector: request.headers.x-gateway-model-name
@@ -71,9 +88,13 @@ spec:
                 - selector: auth.identity.groups
                   operator: incl
                   value: platform-admins
-                - selector: auth.identity.team
-                  operator: eq
-                  value: research
+                - all:
+                    - selector: auth.identity.org
+                      operator: eq
+                      value: acme
+                    - selector: auth.identity.team
+                      operator: eq
+                      value: research
       deepseek-v4-pro-needs-admin-or-entitled-team:
         when:
           - selector: request.headers.x-gateway-model-name
@@ -85,9 +106,13 @@ spec:
                 - selector: auth.identity.groups
                   operator: incl
                   value: platform-admins
-                - selector: auth.identity.team
-                  operator: eq
-                  value: research
+                - all:
+                    - selector: auth.identity.org
+                      operator: eq
+                      value: acme
+                    - selector: auth.identity.team
+                      operator: eq
+                      value: research
     response:
       success:
         headers:

@@ -96,6 +96,70 @@ def tenant_rules(policy: dict) -> dict:
     return found
 
 
+def kuadrant_binds_org(path: Path, org: str, team: str) -> list[str]:
+    """Kuadrant rules that match the entitled team without also matching its org.
+
+    Authorino ANDs the entries of `patterns` and ORs the entries of an `any`,
+    so the team test lives inside an `any` (the other arm being the admin
+    one). The org has to be bound *inside that same arm* -- as an `all` -- and
+    not hoisted up to `patterns`, which would AND it with the admin arm and
+    lock admins out, since they carry no org claim.
+    """
+    unbound = []
+    for document in documents(path):
+        rules = document.get("spec", {}).get("rules", {}).get("authorization", {})
+        for name, rule in rules.items():
+            arms = rule.get("patternMatching", {}).get("patterns", [])
+            for arm in arms:
+                for branch in arm.get("any", []) or [arm]:
+                    tests = branch.get("all", [branch])
+                    selectors = {
+                        (t.get("selector"), str(t.get("value")))
+                        for t in tests
+                        if isinstance(t, dict)
+                    }
+                    if ("auth.identity.team", team) not in selectors:
+                        continue
+                    if ("auth.identity.org", org) not in selectors:
+                        unbound.append(name)
+    return unbound
+
+
+def envoy_binds_org(path: Path, org: str, team: str) -> list[str]:
+    """Envoy rules whose JWT claims name the entitled team but not its org."""
+    unbound = []
+    for document in documents(path):
+        rules = document.get("spec", {}).get("authorization", {}).get("rules", [])
+        for rule in rules:
+            claims = rule.get("principal", {}).get("jwt", {}).get("claims", [])
+            named = {claim["name"]: claim.get("values", []) for claim in claims}
+            if team not in named.get("team", []):
+                continue
+            if org not in named.get("org", []):
+                unbound.append(rule.get("name", "<unnamed>"))
+    return unbound
+
+
+def agent_binds_org(path: Path, org: str, team: str) -> list[str]:
+    """agentgateway rules naming the entitled team outside its group path.
+
+    Authorization here is CEL over the verified claims, so there is no
+    structure to walk. The binding *is* the path: `/acme/research` names both
+    halves at once, and a bare `research` would not.
+    """
+    unbound = []
+    for document in documents(path):
+        authorization = (
+            document.get("spec", {}).get("traffic", {}).get("authorization", {})
+        )
+        for expression in authorization.get("policy", {}).get("matchExpressions", []):
+            if team not in expression:
+                continue
+            if f"/{org}/{team}" not in expression:
+                unbound.append(document.get("metadata", {}).get("name", "<unnamed>"))
+    return unbound
+
+
 def main() -> int:
     problems: list[str] = []
     realm = json.loads(REALM.read_text())
@@ -241,7 +305,7 @@ def main() -> int:
     # The entitled team has to be named identically by all three authorization
     # policies and has to be a team the probe user is actually in, or the
     # entitlement row measures three different things.
-    entitled = tenancy.get("team_a", (None, None))[1]
+    entitled_org, entitled = tenancy.get("team_a", (None, None))
     if entitled:
         sources = {
             "Kuadrant": KUADRANT_AUTH.read_text(),
@@ -253,6 +317,27 @@ def main() -> int:
                 problems.append(
                     f"the {stack} authorization policy never mentions the entitled team "
                     f"'{entitled}', so its entitlement row cannot pass"
+                )
+
+    # A team name is only unique inside its org, so an entitlement that names
+    # the team alone is granted to a team of that name in *every* org. That is
+    # a tenant boundary crossed by a name collision rather than by a grant, and
+    # it is invisible until two orgs happen to use the same team name -- so the
+    # realm keeps one that does. Each stack spells the binding differently;
+    # what is checked is that all three bind it at all.
+    if entitled and entitled_org:
+        for stack, path, binds in (
+            ("Kuadrant", KUADRANT_AUTH, kuadrant_binds_org),
+            ("Envoy Gateway", ENVOY_SECURITY, envoy_binds_org),
+            ("agentgateway", AGENT_AUTH, agent_binds_org),
+        ):
+            unbound = binds(path, entitled_org, entitled)
+            for rule in unbound:
+                problems.append(
+                    f"the {stack} authorization rule '{rule}' entitles team "
+                    f"'{entitled}' without binding it to org '{entitled_org}': a "
+                    f"'{entitled}' team in any other org inherits the entitlement. "
+                    f"The realm carries such a team for exactly this reason"
                 )
 
     for problem in problems:
