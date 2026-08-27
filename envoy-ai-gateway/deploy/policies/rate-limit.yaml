@@ -1,4 +1,4 @@
-# Request rate limits, per-plan daily quotas, and the token budget, all as
+# Request rate limits, per-tier daily quotas, and the token budget, all as
 # Envoy Gateway global rate limit rules counted in Redis.
 #
 # Buckets are keyed by the identity headers the SecurityPolicy copies out of
@@ -44,9 +44,9 @@ spec:
             unit: Day
         - clientSelectors:
             - headers:
-                - name: x-auth-plan
+                - name: x-auth-tier
                   type: Exact
-                  value: free
+                  value: small
                 - name: x-user-id
                   type: Distinct
           limit:
@@ -54,9 +54,19 @@ spec:
             unit: Day
         - clientSelectors:
             - headers:
-                - name: x-auth-plan
+                - name: x-auth-tier
                   type: Exact
-                  value: gold
+                  value: medium
+                - name: x-user-id
+                  type: Distinct
+          limit:
+            requests: 10000
+            unit: Day
+        - clientSelectors:
+            - headers:
+                - name: x-auth-tier
+                  type: Exact
+                  value: big
                 - name: x-user-id
                   type: Distinct
           limit:

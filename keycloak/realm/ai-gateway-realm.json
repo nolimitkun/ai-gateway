@@ -6,63 +6,24 @@
   "accessTokenLifespan": 3600,
   "groups": [
     {
-      "name": "platform-admins"
-    },
-    {
-      "name": "model-users"
-    },
-    {
-      "name": "guests"
-    },
-    {
       "name": "acme",
-      "attributes": {
-        "tier": [
-          "enterprise"
-        ]
-      },
       "subGroups": [
         {
-          "name": "research",
-          "attributes": {
-            "allowed-classes": [
-              "b300,h200"
-            ]
-          }
+          "name": "research"
         },
         {
-          "name": "support",
-          "attributes": {
-            "allowed-classes": [
-              "l40s"
-            ]
-          }
+          "name": "support"
         }
       ]
     },
     {
       "name": "globex",
-      "attributes": {
-        "tier": [
-          "free"
-        ]
-      },
       "subGroups": [
         {
-          "name": "platform",
-          "attributes": {
-            "allowed-classes": [
-              "h100"
-            ]
-          }
+          "name": "platform"
         },
         {
-          "name": "research",
-          "attributes": {
-            "allowed-classes": [
-              "h100"
-            ]
-          }
+          "name": "research"
         }
       ]
     }
@@ -70,25 +31,13 @@
   "clientScopes": [
     {
       "name": "ai-gateway-claims",
-      "description": "Claims the gateway policies authorize on: groups, group_paths, org, team, plan, audience.",
+      "description": "Claims the gateway uses: tier for model authorization; org and team for tenant limits; audience and username for identity.",
       "protocol": "openid-connect",
       "attributes": {
         "include.in.token.scope": "true",
         "display.on.consent.screen": "false"
       },
       "protocolMappers": [
-        {
-          "name": "groups",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-group-membership-mapper",
-          "config": {
-            "claim.name": "groups",
-            "full.path": "false",
-            "access.token.claim": "true",
-            "id.token.claim": "true",
-            "userinfo.token.claim": "true"
-          }
-        },
         {
           "name": "group-paths",
           "protocol": "openid-connect",
@@ -128,12 +77,12 @@
           }
         },
         {
-          "name": "plan",
+          "name": "tier",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-attribute-mapper",
           "config": {
-            "user.attribute": "plan",
-            "claim.name": "plan",
+            "user.attribute": "tier",
+            "claim.name": "tier",
             "jsonType.label": "String",
             "access.token.claim": "true",
             "id.token.claim": "true",
@@ -187,17 +136,13 @@
       "enabled": true,
       "emailVerified": true,
       "firstName": "Alice",
-      "lastName": "Admin",
+      "lastName": "Big",
       "email": "alice@example.com",
       "attributes": {
-        "plan": [
-          "gold"
+        "tier": [
+          "big"
         ]
       },
-      "groups": [
-        "/platform-admins",
-        "/model-users"
-      ],
       "credentials": [
         {
           "type": "password",
@@ -211,16 +156,13 @@
       "enabled": true,
       "emailVerified": true,
       "firstName": "Bob",
-      "lastName": "Builder",
+      "lastName": "Medium",
       "email": "bob@example.com",
       "attributes": {
-        "plan": [
-          "free"
+        "tier": [
+          "medium"
         ]
       },
-      "groups": [
-        "/model-users"
-      ],
       "credentials": [
         {
           "type": "password",
@@ -234,16 +176,8 @@
       "enabled": true,
       "emailVerified": true,
       "firstName": "Mallory",
-      "lastName": "Guest",
+      "lastName": "NoTier",
       "email": "mallory@example.com",
-      "attributes": {
-        "plan": [
-          "free"
-        ]
-      },
-      "groups": [
-        "/guests"
-      ],
       "credentials": [
         {
           "type": "password",
@@ -257,11 +191,11 @@
       "enabled": true,
       "emailVerified": true,
       "firstName": "Carol",
-      "lastName": "Researcher",
+      "lastName": "Big",
       "email": "carol@acme.example.com",
       "attributes": {
-        "plan": [
-          "gold"
+        "tier": [
+          "big"
         ],
         "org": [
           "acme"
@@ -271,7 +205,6 @@
         ]
       },
       "groups": [
-        "/model-users",
         "/acme/research"
       ],
       "credentials": [
@@ -287,11 +220,11 @@
       "enabled": true,
       "emailVerified": true,
       "firstName": "Dave",
-      "lastName": "Support",
+      "lastName": "Medium",
       "email": "dave@acme.example.com",
       "attributes": {
-        "plan": [
-          "gold"
+        "tier": [
+          "medium"
         ],
         "org": [
           "acme"
@@ -301,7 +234,6 @@
         ]
       },
       "groups": [
-        "/model-users",
         "/acme/support"
       ],
       "credentials": [
@@ -317,11 +249,11 @@
       "enabled": true,
       "emailVerified": true,
       "firstName": "Erin",
-      "lastName": "Platform",
+      "lastName": "Small",
       "email": "erin@globex.example.com",
       "attributes": {
-        "plan": [
-          "free"
+        "tier": [
+          "small"
         ],
         "org": [
           "globex"
@@ -331,7 +263,6 @@
         ]
       },
       "groups": [
-        "/model-users",
         "/globex/platform"
       ],
       "credentials": [
@@ -347,11 +278,11 @@
       "enabled": true,
       "emailVerified": true,
       "firstName": "Frank",
-      "lastName": "Research",
+      "lastName": "Small",
       "email": "frank@globex.example.com",
       "attributes": {
-        "plan": [
-          "free"
+        "tier": [
+          "small"
         ],
         "org": [
           "globex"
@@ -361,7 +292,6 @@
         ]
       },
       "groups": [
-        "/model-users",
         "/globex/research"
       ],
       "credentials": [

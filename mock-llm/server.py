@@ -15,6 +15,31 @@ UPSTREAM = os.getenv("UPSTREAM_ID", "unknown")
 ACCELERATOR = os.getenv("ACCELERATOR", "").strip().lower()
 PORT = int(os.getenv("PORT", "8000"))
 EMBEDDING_DIMENSIONS = 8
+
+# Canonical non-fixture tier contract. Accelerator placement and tier are
+# related by this profile, but authorization consumes the model tier: only the
+# three B300 chat models are big, deepseek-v4-flash is medium, and every H100
+# or L40S model below is small.
+TIER_MODELS = {
+    "big": ("kimi-k3", "glm-5.3", "deepseek-v4-pro"),
+    "medium": ("deepseek-v4-flash",),
+    "small": (
+        "qwen3.8-27b",
+        "qwen3-embedding-8b",
+        "e5-mistral-7b-instruct",
+        "voxtral-small-24b",
+        "bge-m3",
+        "jina-embeddings-v3",
+        "nomic-embed-text-v2-moe",
+        "bge-reranker-v2-m3",
+        "jina-reranker-v2-base-multilingual",
+        "whisper-large-v3",
+        "voxtral-mini-3b",
+    ),
+}
+MODEL_TIERS = {
+    model: tier for tier, models in TIER_MODELS.items() for model in models
+}
 CREATED = 1767225600
 
 # Deterministic mock catalog. Every entry is a fixture: no weights are loaded
@@ -26,7 +51,7 @@ CATALOG = [
         "id": "kimi-k3",
         "accelerator": "b300",
         "task": "chat",
-        "tier": "big",
+        "tier": MODEL_TIERS["kimi-k3"],
         "owned_by": "moonshot-ai",
         "context_window": 262144,
         "max_output_tokens": 16384,
@@ -36,7 +61,7 @@ CATALOG = [
         "id": "glm-5.3",
         "accelerator": "b300",
         "task": "chat",
-        "tier": "big",
+        "tier": MODEL_TIERS["glm-5.3"],
         "owned_by": "zhipu-ai",
         "context_window": 204800,
         "max_output_tokens": 16384,
@@ -46,7 +71,7 @@ CATALOG = [
         "id": "deepseek-v4-pro",
         "accelerator": "b300",
         "task": "chat",
-        "tier": "big",
+        "tier": MODEL_TIERS["deepseek-v4-pro"],
         "owned_by": "deepseek",
         "context_window": 163840,
         "max_output_tokens": 32768,
@@ -56,7 +81,7 @@ CATALOG = [
         "id": "deepseek-v4-flash",
         "accelerator": "h200",
         "task": "chat",
-        "tier": "medium",
+        "tier": MODEL_TIERS["deepseek-v4-flash"],
         "owned_by": "deepseek",
         "context_window": 131072,
         "max_output_tokens": 8192,
@@ -66,7 +91,7 @@ CATALOG = [
         "id": "qwen3.8-27b",
         "accelerator": "h100",
         "task": "chat",
-        "tier": "small",
+        "tier": MODEL_TIERS["qwen3.8-27b"],
         "owned_by": "alibaba",
         "context_window": 65536,
         "max_output_tokens": 8192,
@@ -76,7 +101,7 @@ CATALOG = [
         "id": "mock-kserve",
         "accelerator": "cpu",
         "task": "chat",
-        "tier": "fixture",
+        "tier": "small",
         "owned_by": "kserve-mock",
         "context_window": 8192,
         "max_output_tokens": 1024,
@@ -86,7 +111,7 @@ CATALOG = [
         "id": "qwen3-embedding-8b",
         "accelerator": "h100",
         "task": "embedding",
-        "tier": "big",
+        "tier": MODEL_TIERS["qwen3-embedding-8b"],
         "owned_by": "alibaba",
         "context_window": 32768,
         "dimensions": 4096,
@@ -97,7 +122,7 @@ CATALOG = [
         "id": "bge-m3",
         "accelerator": "l40s",
         "task": "embedding",
-        "tier": "medium",
+        "tier": MODEL_TIERS["bge-m3"],
         "owned_by": "baai",
         "context_window": 8192,
         "dimensions": 1024,
@@ -108,7 +133,7 @@ CATALOG = [
         "id": "e5-mistral-7b-instruct",
         "accelerator": "h100",
         "task": "embedding",
-        "tier": "big",
+        "tier": MODEL_TIERS["e5-mistral-7b-instruct"],
         "owned_by": "microsoft",
         "context_window": 32768,
         "dimensions": 4096,
@@ -119,7 +144,7 @@ CATALOG = [
         "id": "jina-embeddings-v3",
         "accelerator": "l40s",
         "task": "embedding",
-        "tier": "medium",
+        "tier": MODEL_TIERS["jina-embeddings-v3"],
         "owned_by": "jina-ai",
         "context_window": 8192,
         "dimensions": 1024,
@@ -130,7 +155,7 @@ CATALOG = [
         "id": "nomic-embed-text-v2-moe",
         "accelerator": "l40s",
         "task": "embedding",
-        "tier": "small",
+        "tier": MODEL_TIERS["nomic-embed-text-v2-moe"],
         "owned_by": "nomic-ai",
         "context_window": 2048,
         "dimensions": 768,
@@ -141,7 +166,7 @@ CATALOG = [
         "id": "mock-embedding",
         "accelerator": "cpu",
         "task": "embedding",
-        "tier": "fixture",
+        "tier": "small",
         "owned_by": "kserve-mock",
         "context_window": 2048,
         "dimensions": EMBEDDING_DIMENSIONS,
@@ -152,7 +177,7 @@ CATALOG = [
         "id": "bge-reranker-v2-m3",
         "accelerator": "l40s",
         "task": "rerank",
-        "tier": "medium",
+        "tier": MODEL_TIERS["bge-reranker-v2-m3"],
         "owned_by": "baai",
         "context_window": 8192,
         "max_documents": 256,
@@ -162,7 +187,7 @@ CATALOG = [
         "id": "jina-reranker-v2-base-multilingual",
         "accelerator": "l40s",
         "task": "rerank",
-        "tier": "small",
+        "tier": MODEL_TIERS["jina-reranker-v2-base-multilingual"],
         "owned_by": "jina-ai",
         "context_window": 8192,
         "max_documents": 128,
@@ -172,7 +197,7 @@ CATALOG = [
         "id": "mock-reranker",
         "accelerator": "cpu",
         "task": "rerank",
-        "tier": "fixture",
+        "tier": "small",
         "owned_by": "kserve-mock",
         "context_window": 2048,
         "max_documents": 64,
@@ -182,7 +207,7 @@ CATALOG = [
         "id": "whisper-large-v3",
         "accelerator": "l40s",
         "task": "transcription",
-        "tier": "big",
+        "tier": MODEL_TIERS["whisper-large-v3"],
         "owned_by": "openai",
         "features": ["asr", "diarization", "timestamps", "translation"],
         "max_speakers": 8,
@@ -191,7 +216,7 @@ CATALOG = [
         "id": "voxtral-small-24b",
         "accelerator": "h100",
         "task": "transcription",
-        "tier": "big",
+        "tier": MODEL_TIERS["voxtral-small-24b"],
         "owned_by": "mistral-ai",
         "features": ["asr", "diarization", "timestamps", "audio-understanding"],
         "max_speakers": 8,
@@ -200,7 +225,7 @@ CATALOG = [
         "id": "voxtral-mini-3b",
         "accelerator": "l40s",
         "task": "transcription",
-        "tier": "small",
+        "tier": MODEL_TIERS["voxtral-mini-3b"],
         "owned_by": "mistral-ai",
         "features": ["asr", "timestamps"],
         "max_speakers": 1,
@@ -209,7 +234,7 @@ CATALOG = [
         "id": "mock-whisper",
         "accelerator": "cpu",
         "task": "transcription",
-        "tier": "fixture",
+        "tier": "small",
         "owned_by": "kserve-mock",
         "features": ["asr", "diarization", "timestamps"],
         "max_speakers": 4,
@@ -225,7 +250,7 @@ if MODEL not in MODELS:
         "id": MODEL,
         "accelerator": ACCELERATOR or "cpu",
         "task": "chat",
-        "tier": "fixture",
+        "tier": "small",
         "owned_by": "kserve-mock",
         "context_window": 8192,
         "max_output_tokens": 1024,
@@ -259,7 +284,7 @@ DEFAULT_MODEL = {
 }
 
 # Completion length reported per tier, so a client can tell the tiers apart.
-TIER_COMPLETION_TOKENS = {"big": 48, "medium": 24, "small": 12, "fixture": 5}
+TIER_COMPLETION_TOKENS = {"big": 48, "medium": 24, "small": 12}
 
 TRUE_VALUES = ("1", "true", "yes", "on")
 
@@ -528,7 +553,7 @@ class Handler(BaseHTTPRequestHandler):
         """Echo only non-secret headers that prove gateway policy behavior."""
         allowed = {
             "x-auth-user",
-            "x-auth-plan",
+            "x-auth-tier",
             "x-user-id",
             "x-gateway-model-name",
         }

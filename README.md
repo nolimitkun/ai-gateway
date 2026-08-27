@@ -84,11 +84,11 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-27 14:48 (30 requests) | 2026-08-27 14:53 (30 requests) | 2026-08-27 09:29 (30 requests) |
+| Last isolated comparison (UTC) | 2026-08-27 22:50 (30 requests) | 2026-08-27 22:42 (30 requests) | 2026-08-27 22:44 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
-| Route rules | body.model + 12 pool rules | body.model + 12 pool rules | body.model + 12 pool rules |
+| Route rules | 12 body.model mappings / 11 pool rules | 12 body.model mappings / 11 pool rules | 12 body.model mappings / 11 pool rules |
 | OpenAI `body.model` to accelerator pool | 4/4 pools; client headers overwritten | 4/4 pools; client headers overwritten | 4/4 pools; client headers overwritten |
 | Endpoint-picker transport | TLS policy ready | Plaintext in local fixture | Plaintext in local fixture |
 | Workload replicas | 2/2 | 2/2 | 2/2 |
@@ -106,23 +106,24 @@ zero-delay Python runtime, not production performance benchmarks.
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
 | Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
 | Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
-| Local chat p50 | 24 ms | 31 ms | 53 ms |
-| Policy objects reporting ready | 3/3 | 3/3 | 5/5 |
+| Local chat p50 | 44 ms | 44 ms | 52 ms |
+| Policy objects reporting ready | 3/3 | 3/3 | 6/6 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
 | Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
 | Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
 | Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | b300 / h200 / h100 |
-| Decision headers returned to the client | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk |
-| Auto-routed chat p50 | 28 ms | 24 ms | 19 ms |
+| Decision headers returned to the client | big / medium / small | big / medium / small | big / medium / small |
+| Auto-routed chat p50 | 31 ms | 21 ms | 13 ms |
 | Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 500 / auto 500 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
 | Authentication across models/chat/embed/rerank/STT | 5/5 denied / 5/5 allowed | 5/5 denied / 5/5 allowed | 5/5 denied / 5/5 allowed |
-| Verified identity headers at model pod | x-auth-plan=gold, x-auth-user=alice | x-auth-plan=gold, x-user-id=alice | Not configured |
-| Authorization: guest / non-admin B300 / admin B300 | 403 / 403 / 200 | 403 / 403 / 200 | 403 / 403 / 200 |
-| Team entitlement to the B300 class | unentitled 403 / entitled 200 | unentitled 403 / entitled 200 | unentitled 403 / entitled 200 |
-| Same team name, different org | Denied (HTTP 403) | Denied (HTTP 403) | Denied (HTTP 403) |
+| Verified identity headers at model pod | x-auth-tier=big, x-auth-user=alice | x-auth-tier=big, x-user-id=alice | Not configured |
+| Authorization: no tier / medium→big / big→big | 403 / 403 / 200 | 403 / 403 / 200 | 403 / 403 / 200 |
+| Tier authorization: explicit big/medium/small tasks / auto tiers | medium ceiling 403/200/200/200; big ceiling 4/4; auto 403/200/200 | medium ceiling 403/200/200/200; big ceiling 4/4; auto 403/200/200 | medium ceiling 403/200/200/200; big ceiling 4/4; auto 403/200/200 |
+| Tier ceiling: medium→big / big→big | medium 403 / big 200 | medium 403 / big 200 | medium 403 / big 200 |
+| Tenant metadata cannot bypass tier | Denied by small tier (HTTP 403) | Denied by small tier (HTTP 403) | Denied by small tier (HTTP 403) |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
 | Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
 | Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
@@ -346,7 +347,7 @@ flowchart TB
     end
     subgraph APP["ai-demo"]
       KR["HTTPRoute/keycloak<br/>/realms"] --> KC["Keycloak 26.4.0"]
-      R["HTTPRoute/kserve-mock<br/>body.model + 12 pool rules"] --> P["InferencePool"]
+      R["HTTPRoute/kserve-mock<br/>12 model mappings / 11 pool rules"] --> P["InferencePool"]
       AP["AuthPolicy"] -.-> WASM
       RP["RateLimitPolicy"] -.-> WASM
       TP["TokenRateLimitPolicy"] -.-> WASM
@@ -375,7 +376,7 @@ flowchart TB
 | Public endpoint | `http://localhost:8082`; one OpenShift-style shared Gateway in `openshift-ingress` |
 | Control/data plane | Kuadrant 1.5.2 and Istio 1.29.2 program an Envoy gateway proxy |
 | Gateway API versions | Gateway API 1.4.1; Inference Extension 1.5.0 |
-| Security | Keycloak JWT, group/B300 authorization through `AuthPolicy` and Authorino |
+| Security | Keycloak JWT plus big-tier authorization through `AuthPolicy` and Authorino |
 | Limits | Limitador-backed request, quota, and response `usage.total_tokens` accounting; fixture probe buckets are shared |
 | Model-to-pool routing | Raw Istio `EnvoyFilter` runs BBR only on named JSON task/model rules; a TLS `DestinationRule` handles BBR's runtime self-signed certificate |
 | Semantic routing | A preceding raw `EnvoyFilter` covers the base chat rule and all five model-specific chat rules; BBR then recomputes the route, so `auto` reaches B300/H200/H100 even when a client forges the internal model header |
@@ -407,7 +408,7 @@ flowchart TB
     end
     subgraph APP["ai-demo"]
       KR["HTTPRoute/keycloak<br/>/realms"] --> KC["Keycloak 26.4.0"]
-      R["HTTPRoute/kserve-mock<br/>body.model + 12 pool rules"] --> P["InferencePool"]
+      R["HTTPRoute/kserve-mock<br/>12 model mappings / 11 pool rules"] --> P["InferencePool"]
       AIR["AIGatewayRoute/kserve-mock-ai<br/>Host ai.local"]
       AIR --> P
       SP["SecurityPolicy<br/>JWT + authz + CORS"] -.-> GW
@@ -437,7 +438,7 @@ flowchart TB
 | Public endpoint | `http://localhost:8080`; `Gateway/ai-gateway` in `ai-demo` |
 | Control/data plane | Envoy Gateway 1.8.1 plus Envoy AI Gateway 1.0.0 program an Envoy proxy |
 | Gateway API versions | Inference Extension 1.5.0; Envoy Gateway supplies its Gateway API CRDs |
-| Security | `SecurityPolicy` verifies Keycloak JWT, exports user/plan headers, applies group authorization and CORS |
+| Security | `SecurityPolicy` verifies Keycloak JWT, exports user/tier headers, applies tier-ceiling authorization and CORS |
 | Limits | `BackendTrafficPolicy` global limits; Envoy rate-limit service stores keyed counters in Redis |
 | Token path | `Host: ai.local` uses `AIGatewayRoute`; AI ext_proc publishes `llm_total_token` consumed as response cost |
 | Model-to-pool routing | `EnvoyExtensionPolicy` calls BBR through a typed HTTP/2 TLS `Backend`; base and model sections are both covered against header spoofing |
@@ -460,9 +461,9 @@ flowchart TB
       GW["Gateway/ai-gateway<br/>Rust proxy"]
       UI["agentgateway UI :15000<br/>make agent-ui"] --- GW
       KR["HTTPRoute/keycloak<br/>/realms"] --> KC["Keycloak 26.4.0"]
-      R["HTTPRoute/kserve-mock<br/>body.model + 12 pool rules"] --> P["InferencePool"]
+      R["HTTPRoute/kserve-mock<br/>12 model mappings / 11 pool rules"] --> P["InferencePool"]
       JWT["AgentgatewayPolicy<br/>JWT authentication"] -.-> GW
-      AZ["AgentgatewayPolicy<br/>member + B300 authorization"] -.-> GW
+      AZ["AgentgatewayPolicy<br/>small + medium + big tier ceiling"] -.-> GW
       RL["AgentgatewayPolicy<br/>local request/quota counters"] -.-> GW
       CORS["AgentgatewayPolicy<br/>CORS"] -.-> GW
       EP["AgentgatewayPolicy PreRouting<br/>chat: semantic, tasks: BBR<br/>+ transformation to routing header"] -.-> GW
@@ -491,7 +492,7 @@ flowchart TB
 | Public endpoint | `http://localhost:8081`; UI through `make agent-ui` at `http://localhost:15000/ui` |
 | Control/data plane | agentgateway 1.4.1 controller and Rust proxy |
 | Gateway API versions | Gateway API 1.6.0; Inference Extension 1.5.0 |
-| Security | Separate `AgentgatewayPolicy` resources for Keycloak JWT, group membership, B300 authorization, and CORS |
+| Security | Separate `AgentgatewayPolicy` resources for Keycloak JWT, small/medium/big tier ceilings, and CORS |
 | Limits | In-process local request/minute and quota/hour counters, shared per proxy; global mode is required for durable keyed windows |
 | Token boundary | Generic KServe `InferencePool` does not publish agentgateway AI-backend tokenization metadata, so token units are reported unavailable |
 | Model-to-pool routing | Gateway-scoped PreRouting BBR uses a native `AgentgatewayBackend` with HTTP/2 TLS and handles chat, embedding, and rerank JSON bodies; with the semantic router installed it keeps the task paths and the router takes chat |
@@ -552,6 +553,10 @@ curl "$BASE/v1/audio/transcriptions" \
 Every identifier below is a fixture. Unknown models return HTTP 404
 `model_not_found`; models sent to the wrong task return HTTP 400.
 
+The canonical authorization contract is: B300 models are `big`, the H200
+model is `medium`, and every H100 or L40S model is `small`. CPU-only fixture
+models are also `small`. Task type never promotes a model to another tier.
+
 | Model | Task | Tier | Placement | Relevant limits/features |
 |---|---|---|---|---|
 | `kimi-k3` | Chat | Big | B300 | 262144 context, 16384 output |
@@ -559,20 +564,20 @@ Every identifier below is a fixture. Unknown models return HTTP 404
 | `deepseek-v4-pro` | Chat | Big | B300 | 163840 context, 32768 output |
 | `deepseek-v4-flash` | Chat | Medium | H200 | 131072 context, 8192 output |
 | `qwen3.8-27b` | Chat | Small | H100 | 65536 context, 8192 output |
-| `mock-kserve` | Chat | Fixture | CPU | 8192 context, 1024 output |
-| `qwen3-embedding-8b` | Embedding | Big | H100 | 4096 dimensions, Matryoshka |
-| `e5-mistral-7b-instruct` | Embedding | Big | H100 | 4096 dimensions |
-| `bge-m3` | Embedding | Medium | L40S | 1024 dimensions |
-| `jina-embeddings-v3` | Embedding | Medium | L40S | 1024 dimensions, Matryoshka |
+| `mock-kserve` | Chat | Small | CPU | 8192 context, 1024 output |
+| `qwen3-embedding-8b` | Embedding | Small | H100 | 4096 dimensions, Matryoshka |
+| `e5-mistral-7b-instruct` | Embedding | Small | H100 | 4096 dimensions |
+| `bge-m3` | Embedding | Small | L40S | 1024 dimensions |
+| `jina-embeddings-v3` | Embedding | Small | L40S | 1024 dimensions, Matryoshka |
 | `nomic-embed-text-v2-moe` | Embedding | Small | L40S | 768 dimensions, Matryoshka |
-| `mock-embedding` | Embedding | Fixture | CPU | 8 dimensions |
-| `bge-reranker-v2-m3` | Rerank | Medium | L40S | 256 documents |
+| `mock-embedding` | Embedding | Small | CPU | 8 dimensions |
+| `bge-reranker-v2-m3` | Rerank | Small | L40S | 256 documents |
 | `jina-reranker-v2-base-multilingual` | Rerank | Small | L40S | 128 documents |
-| `mock-reranker` | Rerank | Fixture | CPU | 64 documents |
-| `whisper-large-v3` | Transcription | Big | L40S | ASR, timestamps, mock diarization up to 8 speakers |
-| `voxtral-small-24b` | Transcription | Big | H100 | ASR, timestamps, mock diarization up to 8 speakers |
+| `mock-reranker` | Rerank | Small | CPU | 64 documents |
+| `whisper-large-v3` | Transcription | Small | L40S | ASR, timestamps, mock diarization up to 8 speakers |
+| `voxtral-small-24b` | Transcription | Small | H100 | ASR, timestamps, mock diarization up to 8 speakers |
 | `voxtral-mini-3b` | Transcription | Small | L40S | ASR and timestamps; no diarization |
-| `mock-whisper` | Transcription | Fixture | CPU | ASR, timestamps, mock diarization up to 4 speakers |
+| `mock-whisper` | Transcription | Small | CPU | ASR, timestamps, mock diarization up to 4 speakers |
 
 Chat responses expose the selected tier through `mock_tier`, message content,
 and deterministic completion usage. Matryoshka embedding fixtures accept a
@@ -612,8 +617,9 @@ model's intended class. A model sent to the wrong pool returns HTTP 404
 
 BBR 1.2.1 parses JSON. Chat, embedding, and rerank requests therefore use
 body-based pool routing. OpenAI speech-to-text is multipart, so its `model`
-form field cannot be extracted by this BBR release and remains on the shared
-fixture route. This is a tested limitation, not an implied STT pool claim.
+form field cannot be extracted by this BBR release and remains on a dedicated
+shared-fixture route section. Every transcription model is small-tier, so the
+ordinary small-tier ceiling policy is sufficient for that section.
 
 ### Production vLLM
 
@@ -622,12 +628,12 @@ replacement for the combined fixture: one independently scalable vLLM
 `LLMInferenceService` per model and task. The top-level `kserve/production/`
 keeps the same package available to arbitrary external GPU contexts.
 
-| Public endpoint | Hugging Face model | Served name | API | Reference GPU |
-|---|---|---|---|---|
-| `/v1/chat/completions`, `/v1/models` | `Qwen/Qwen3-8B` | `qwen3-8b` | Chat and models | H100 |
-| `/v1/embeddings` | `Qwen/Qwen3-Embedding-8B` | `qwen3-embedding-8b` | Embeddings | H100 |
-| `/rerank`, `/v1/rerank`, `/v2/rerank` | `BAAI/bge-reranker-v2-m3` | `bge-reranker-v2-m3` | Rerank | L40S |
-| `/v1/audio/transcriptions` | `openai/whisper-large-v3-turbo` | `whisper-large-v3-turbo` | Transcription | L40S |
+| Public endpoint | Hugging Face model | Served name | Tier | API | Reference GPU |
+|---|---|---|---|---|---|
+| `/v1/chat/completions`, `/v1/models` | `Qwen/Qwen3.8-27B` | `qwen3.8-27b` (`auto` alias) | Small | Chat and models | H100 |
+| `/v1/embeddings` | `Qwen/Qwen3-Embedding-8B` | `qwen3-embedding-8b` | Small | Embeddings | H100 |
+| `/rerank`, `/v1/rerank`, `/v2/rerank` | `BAAI/bge-reranker-v2-m3` | `bge-reranker-v2-m3` | Small | Rerank | L40S |
+| `/v1/audio/transcriptions` | `openai/whisper-large-v3` | `whisper-large-v3` | Small | Transcription | L40S |
 
 The shared runtime config uses the official pinned
 [`vllm/vllm-openai:v0.27.0` image](https://docs.vllm.ai/en/v0.27.0/deployment/docker/),
@@ -638,11 +644,13 @@ mock. Version 0.27.0 includes the fix for
 [GHSA-7m6h-x95x-82q5](https://github.com/vllm-project/vllm/security/advisories/GHSA-7m6h-x95x-82q5).
 
 Deploy to a KServe 0.20 cluster with NVIDIA GPU nodes and an existing
-`ai-demo/ai-gateway`:
+`ai-demo/ai-gateway`. On the three repository-owned contexts, reconcile
+`make policies CLUSTER=<name>` first; the deployment refuses to create open
+production routes and installs fixed-tier native policies with them:
 
 ```bash
 make vllm-production VLLM_CONTEXT=my-gpu-context
-make vllm-validate VLLM_BASE_URL=https://gateway.example.com
+make vllm-validate VLLM_BASE_URL=https://gateway.example.com VLLM_TOKEN="$TOKEN"
 make vllm-production-down VLLM_CONTEXT=my-gpu-context
 ```
 
@@ -660,8 +668,9 @@ and the selected gateway's native policy resources against its `HTTPRoute` and
 The common behavior is:
 
 - valid Keycloak access token required; anonymous and forged tokens get 401;
-- `model-users` membership required; B300 additionally requires
-  `platform-admins`, producing 403 for an authenticated but unauthorized user;
+- one scalar Keycloak `tier` claim controls all model authorization: `big`
+  reaches every tier, `medium` reaches medium and small, and `small` reaches
+  small only; org/team never grant model access;
 - equivalent opt-in request and quota probes.
 
 The stack-specific edges are intentional and recorded in the live table:
@@ -691,15 +700,15 @@ bucket.
 Each cluster exposes its own `ai-gateway` Keycloak realm through the same
 gateway endpoint as inference traffic.
 
-| User | Password | Groups | Plan | Expected access |
+| User | Password | Tier ceiling | Tenant path | Expected model access |
 |---|---|---|---|---|
-| `alice` | `alice` | `platform-admins`, `model-users` | Gold | Every model class |
-| `bob` | `bob` | `model-users` | Free | Everything except B300 |
-| `mallory` | `mallory` | `guests` | Free | HTTP 403 on `/v1` |
-| `carol` | `carol` | `model-users`, `/acme/research` | Gold | B300 by team entitlement |
-| `dave` | `dave` | `model-users`, `/acme/support` | Gold | Everything except B300 |
-| `erin` | `erin` | `model-users`, `/globex/platform` | Free | Everything except B300 |
-| `frank` | `frank` | `model-users`, `/globex/research` | Free | Everything except B300 — same team name as `carol`, different org |
+| `alice` | `alice` | Big | — | Big, medium, small |
+| `bob` | `bob` | Medium | — | Medium, small |
+| `mallory` | `mallory` | None | — | HTTP 403 on `/v1` |
+| `carol` | `carol` | Big | `/acme/research` | Big, medium, small |
+| `dave` | `dave` | Medium | `/acme/support` | Medium, small |
+| `erin` | `erin` | Small | `/globex/platform` | Small only |
+| `frank` | `frank` | Small | `/globex/research` | Small only |
 
 ```bash
 BASE=http://localhost:8082
@@ -718,8 +727,7 @@ curl "$BASE/v1/chat/completions" \
 
 The first three identities above are flat. `carol`, `dave` and `erin` add a
 second axis: nested Keycloak groups (`/acme/research`, `/acme/support`,
-`/globex/platform`) where entitlements and budgets exist at the org level, the
-team level and the user level at once.
+`/globex/platform`) used only to test org/team/user rate-limit isolation.
 
 **Identity.** The realm emits the hierarchy twice, and it has to. Keycloak's
 group membership claim carries the paths a user is *directly* in — a member of
@@ -732,33 +740,10 @@ carries the same fact in a flattened form. Those claims are also what keys the
 limit buckets in every stack, since a rate-limit descriptor cannot key on an
 array.
 
-The existing `groups` claim is left alone. Switching it to full paths would
-rewrite `model-users` to `/model-users` and break the authorization rules in
-all three stacks at once, so the path claim is added under a new name.
-
-**Authorization** stacks as: valid token → org → team entitlement → user role.
-The interesting part is that "add an org rule" means something different in
-each engine, and both shapes have a trap:
-
-| Stack | Rules combine by | Consequence |
-|---|---|---|
-| Kuadrant, agentgateway | Cumulative — every rule must pass | A new rule can only *subtract* access. Widening to an entitled team means editing the rule that already denies |
-| Envoy Gateway | First match wins | A new rule can only be reached if it is *prepended*. Appended below an existing `Allow`, an entitlement is dead code |
-
-An entitlement also has to name the org, not just the team. Team names are
-only unique inside their org, so `team == research` grants the B300 class to a
-`research` team in *every* org — a tenant boundary crossed by a name collision
-rather than by a grant. Each stack spells the binding differently: Envoy
-matches the `org` and `team` claims as a pair, agentgateway matches the
-`/acme/research` group path, and Kuadrant nests an `all` inside the `any` so
-that the admin arm stays a real OR (admins carry no `org` claim, and hoisting
-the org test up to `patterns`, which ANDs, would lock them out).
-
-`frank` exists to keep that honest: he is `/globex/research`, the same team
-name as `carol` in a different org. The `Same team name, different org` row
-sends his token at the B300 class, and Kuadrant granted it until the org was
-bound. `make validate` now rejects an entitlement that names the team without
-the org in any of the three policies.
+Model authorization does not read group paths, org, or team. It reads only the
+scalar `tier` claim. The comparison deliberately sends Frank's small-tier token
+from `/globex/research` to a big model to prove tenant metadata cannot widen
+the tier ceiling.
 
 **Limits** nest by intersection: org, team and user counters are all charged
 for the same request, and whichever empties first returns the 429. Team caps
@@ -865,10 +850,10 @@ curl "$BASE/v1/chat/completions" -H 'content-type: application/json' \
 
 | Prompt | Decision | Selected model | Tier |
 |---|---|---|---|
-| Proofs, derivations, step-by-step quantitative work | `deep-reasoning` | `kimi-k3` | Big, B300 |
-| Programming, debugging, refactoring | `code` | `deepseek-v4-flash` | Medium, H200 |
-| Greetings and short conversational turns | `small-talk` | `qwen3.8-27b` | Small, H100 |
-| No decision matched | Default | `mock-kserve` | Fixture, CPU |
+| Proofs, derivations, step-by-step quantitative work | `big` | `kimi-k3` | Big, B300 |
+| Programming, debugging, refactoring | `medium` | `deepseek-v4-flash` | Medium, H200 |
+| Greetings and short conversational turns | `small` | `qwen3.8-27b` | Small, H100 |
+| No decision matched | Default | `qwen3.8-27b` | Small, H100 |
 
 ### How each gateway attaches it
 
@@ -906,10 +891,10 @@ disables mesh mTLS toward the router, which otherwise fails the handshake — an
 because the filter fails open, would leave every request silently unrouted. Two of the three attachments fail open by design: a router that is down leaves
 inference working with the client's original model. agentgateway is the
 exception, and not by preference. There the router owns the pre-routing slot,
-so it resolves the model name that selects the pool *and* that the B300
+so it resolves the model name that selects the pool *and* that the tier-ceiling
 authorization rule reads; a fail-open outage leaves no filter able to name the
 model. Measured with the router scaled to zero, `FailOpen` served an
-unentitled caller the big-tier model it asked for, while explicit chat kept
+a medium-tier caller the big-tier model it asked for, while explicit chat kept
 working. `FailClosed` costs the availability instead, and the
 `Semantic router unavailable` row reports the difference rather than hiding
 it: `explicit 500 / auto 500` against `explicit 200 / auto 404` elsewhere.

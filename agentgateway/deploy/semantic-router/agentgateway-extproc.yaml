@@ -24,7 +24,7 @@
 #
 #   PreRouting extProc      chat -> semantic router, tasks -> BBR
 #   PreRouting transformation   x-gateway-model-name := x-selected-model
-#   route selection             the twelve model rules now match
+#   route selection             the twelve model mappings now match
 #
 # Within PreRouting, extProc runs before transformation. Verified on a live
 # cluster with a probe transformation that copied a header BBR had just set.
@@ -40,18 +40,18 @@
 # is down must not take the inference path with it". That was the right call
 # while the router was an enrichment attached after routing. Here it is the
 # serving path: it resolves the model name that selects the pool and that the
-# B300 authorization rule reads. BBR carries FailClosed for exactly this
+# big-tier authorization rule reads. BBR carries FailClosed for exactly this
 # reason, and the router has taken over BBR's job on this path.
 #
 # The trade-off was measured both ways, with the router scaled to zero:
 #
-#   FailOpen    explicit chat 200, auto 404 -- but an unentitled caller
+#   FailOpen    explicit chat 200, auto 404 -- but a medium-tier caller
 #               asking for kimi-k3 was served it (HTTP 200), because no
 #               filter could name the model for the authorization rule
 #   FailClosed  all chat 500, no bypass; embeddings and reranking unaffected
 #
 # FailOpen keeps a comparison row identical across the three stacks at the
-# cost of dropping an entitlement check during an outage. That is not a
+# cost of dropping the tier-ceiling check during an outage. That is not a
 # trade this repository should make silently, so the flag is closed and the
 # router_fail_open row reports the difference instead.
 apiVersion: agentgateway.dev/v1alpha1
@@ -120,7 +120,7 @@ spec:
         # Chat, router reached: the selected model becomes the routing header,
         # overwriting anything the client sent. This is also what keeps a
         # forged header from downgrading the authorization check -- measured,
-        # an unentitled caller forging `x-gateway-model-name: mock-kserve`
+        # a medium-tier caller forging `x-gateway-model-name: mock-kserve`
         # while asking for kimi-k3 still gets 403.
         #
         # The path and method belong in this condition, not just the one
@@ -146,7 +146,7 @@ spec:
         # Chat, no selection: clear the header so a forged value cannot
         # survive. Unreachable while the arm above is FailClosed; it is kept
         # so switching that flag to FailOpen does not silently open a
-        # header-forgery path as well as an entitlement gap.
+        # header-forgery path as well as a tier-authorization gap.
         - condition: 'request.method == "POST" && request.path == "/v1/chat/completions"'
           policy:
             request:

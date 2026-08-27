@@ -326,7 +326,7 @@ class RuntimeTest(unittest.TestCase):
             {"model": "mock-kserve", "messages": [{"role": "user", "content": "hi"}]},
             {
                 "x-auth-user": "alice",
-                "x-auth-plan": "gold",
+                "x-auth-tier": "big",
                 "x-user-id": "alice",
                 "authorization": "Bearer secret",
                 "x-api-key": "secret",
@@ -335,7 +335,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(
             payload["mock_gateway_headers"],
-            {"x-auth-user": "alice", "x-auth-plan": "gold", "x-user-id": "alice"},
+            {"x-auth-user": "alice", "x-auth-tier": "big", "x-user-id": "alice"},
         )
 
     def test_a_request_no_router_touched_reports_no_decision(self):

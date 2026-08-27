@@ -14,8 +14,7 @@ spec:
     - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-bge-m3}
     - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-jina-embeddings-v3}
     - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-nomic-embed-text-v2-moe}
-    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-bge-reranker-v2-m3}
-    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-jina-reranker-v2-base-multilingual}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock, sectionName: model-l40s-rerankers}
   extProc:
     - backendRefs:
         - {group: gateway.envoyproxy.io, kind: Backend, name: body-based-router}

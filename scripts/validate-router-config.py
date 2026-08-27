@@ -35,6 +35,11 @@ POOL_ROUTE = STACK_ROOTS[0] / "kserve" / "pools" / "route.yaml"
 KUADRANT_ROUTER = STACK_ROOTS[0] / "semantic-router" / "kuadrant-extproc.yaml"
 AGENT_ROUTER = STACK_ROOTS[2] / "semantic-router" / "agentgateway-extproc.yaml"
 AGENT_BBR = STACK_ROOTS[2] / "llm-d" / "agentgateway-extproc.yaml"
+EXPECTED_DECISION_TIERS = {
+    "big": "big",
+    "medium": "medium",
+    "small": "small",
+}
 
 SHARED_COMPONENTS = (
     "kserve/controller-values.yaml",
@@ -46,7 +51,6 @@ SHARED_COMPONENTS = (
     "kserve/pools/kserve-h200.yaml",
     "kserve/pools/kserve-h100.yaml",
     "kserve/pools/kserve-l40s.yaml",
-    "kserve/production/kustomization.yaml",
     "kserve/production/models.yaml",
     "kserve/production/routes.yaml",
     "kserve/production/vllm-config.yaml",
@@ -111,6 +115,7 @@ def main():
     routing = config["routing"]
 
     chat_models = {entry["id"] for entry in CATALOG if entry["task"] == "chat"}
+    tier_by_model = {entry["id"]: entry["tier"] for entry in CATALOG}
     declared = {model["name"] for model in providers["models"]}
 
     for name in sorted(declared):
@@ -142,6 +147,10 @@ def main():
     default = providers["defaults"]["default_model"]
     if default not in declared:
         problems.append(f"default_model '{default}' is not declared under providers.models")
+    elif tier_by_model.get(default) != "small":
+        problems.append(
+            f"default_model '{default}' is {tier_by_model.get(default)}, expected small"
+        )
 
     rules = {
         rule["name"]: rule["keywords"]
@@ -159,6 +168,13 @@ def main():
                 problems.append(
                     f"decision '{name}' selects '{reference['model']}', "
                     "which is not declared under providers.models"
+                )
+            expected_tier = EXPECTED_DECISION_TIERS.get(name)
+            actual_tier = tier_by_model.get(reference["model"])
+            if expected_tier and actual_tier != expected_tier:
+                problems.append(
+                    f"decision '{name}' selects {actual_tier}-tier model "
+                    f"'{reference['model']}', expected {expected_tier}"
                 )
         for condition in decision["rules"]["conditions"]:
             if condition["type"] != "keyword":
@@ -185,6 +201,11 @@ def main():
 
     for name in sorted(set(rules) - referenced):
         problems.append(f"keyword rule '{name}' is not used by any decision")
+    if set(EXPECTED_DECISION_TIERS) != {decision["name"] for decision in decisions}:
+        problems.append(
+            "semantic decisions must be named exactly big, medium, and small, "
+            "and each must select a model in the matching tier"
+        )
 
     # The comparison reports one model per prompt and reads the difference
     # between them as the routing decision. A prompt that matches nothing, or
@@ -227,13 +248,13 @@ def main():
     for rule in pool_route["spec"]["rules"]:
         if not rule["name"].startswith("model-"):
             continue
-        match = rule["matches"][0]
-        headers = match.get("headers", [])
-        if len(headers) != 1 or headers[0].get("name", "").lower() != "x-gateway-model-name":
-            problems.append(f"pool rule '{rule['name']}' does not match the internal BBR model header")
-            continue
-        model = headers[0]["value"]
-        actual_pool_routes[model] = rule["backendRefs"][0]["name"]
+        for match in rule["matches"]:
+            headers = match.get("headers", [])
+            if len(headers) != 1 or headers[0].get("name", "").lower() != "x-gateway-model-name":
+                problems.append(f"pool rule '{rule['name']}' does not match the internal BBR model header")
+                continue
+            model = headers[0]["value"]
+            actual_pool_routes[model] = rule["backendRefs"][0]["name"]
 
     expected_pool_routes = {
         entry["id"]: f"kserve-{entry['accelerator']}-inference-pool"
@@ -272,8 +293,10 @@ def main():
         if rule["name"] == "chat"
         or (
             rule["name"].startswith("model-")
-            and rule["matches"][0].get("path", {}).get("value")
-            == "/v1/chat/completions"
+            and any(
+                match.get("path", {}).get("value") == "/v1/chat/completions"
+                for match in rule["matches"]
+            )
         )
     }
     kuadrant_documents = list(

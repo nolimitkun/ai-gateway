@@ -1,98 +1,64 @@
-# agentgateway authentication and authorization for the KServe route.
-#
-# Policies attach to the same HTTPRoute the other two stacks protect. JWT
-# validation is Strict, so an unauthenticated request never reaches the
-# InferencePool. Authorization is CEL over the verified claims: agentgateway
-# has no claim-matching DSL, every rule is an expression.
+# Keycloak authenticates the caller; one scalar `tier` claim is the complete
+# model-authorization contract. Tiers are ceilings: big can use every tier,
+# medium can use medium and small, and small can use small only.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
-metadata:
-  name: kserve-mock-jwt
-  namespace: ai-demo
+metadata: {name: kserve-mock-jwt, namespace: ai-demo}
 spec:
   targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: HTTPRoute
-      name: kserve-mock
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock}
   traffic:
     jwtAuthentication:
       mode: Strict
       location:
-        header:
-          name: Authorization
-          prefix: "Bearer "
+        header: {name: Authorization, prefix: "Bearer "}
       providers:
         - issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
-          audiences:
-            - ai-gateway
+          audiences: [ai-gateway]
           jwks:
             remote:
-              backendRef:
-                name: keycloak
-                port: 8080
+              backendRef: {name: keycloak, port: 8080}
               jwksPath: /realms/ai-gateway/protocol/openid-connect/certs
-              # v1.4.1 requires at least five minutes. The installer avoids
-              # restarting unchanged ephemeral Keycloak realms, so its signing
-              # key stays stable across normal idempotent policy reconciles.
               cacheDuration: 5m
 ---
-# Every caller must be a member of model-users. `Require` rules are cumulative,
-# so this and the rule below both have to pass.
+# Every served API is at least small tier. These Require policies are
+# cumulative: the route-wide ceiling check runs for every request, then the
+# model-specific medium or big check runs only when BBR resolved that tier.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
-metadata:
-  name: kserve-mock-members
-  namespace: ai-demo
+metadata: {name: kserve-mock-small-tier, namespace: ai-demo}
 spec:
   targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: HTTPRoute
-      name: kserve-mock
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock}
   traffic:
     authorization:
       action: Require
       policy:
         matchExpressions:
-          - 'jwt.groups.exists(g, g == "model-users")'
+          - 'has(jwt.tier) && jwt.tier in ["big", "medium", "small"]'
 ---
-# The B300 model set is admin-only, plus any team entitled to it. BBR derives
-# X-Gateway-Model-Name from the request body before authorization; clients do
-# not select accelerator classes.
-# Written as a Require rule rather than a Deny
-# rule: a Deny whose expression errors fails open, and the membership test on
-# a missing header would error.
-#
-# The team arm is folded into this expression rather than added as a fourth
-# policy, and that is forced by the engine rather than a matter of taste:
-# `Require` rules are cumulative, so a separate policy could only ever
-# subtract access. Widening it to an entitled team means editing the rule that
-# already denies. Envoy Gateway has the mirror-image constraint -- rules are
-# first-match-wins there, so widening is a prepend and it is the *restriction*
-# that risks becoming unreachable.
-#
-# The hierarchy is read from the group path directly here, because
-# authorization is CEL over the verified claims and a subtree test is just
-# startsWith. Kuadrant can do the same through an Authorino CEL `predicate`;
-# Envoy Gateway is the one that cannot, matching claims by exact value with no
-# prefix and no regex, which is why the realm also emits flattened `org` and
-# `team` claims.
-#
-# The `== "/acme/research"` arm is needed because Keycloak emits the paths a
-# user is directly a member of, so a team member carries exactly
-# "/acme/research" and a prefix test alone would miss them.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
-metadata:
-  name: kserve-mock-big-tier
-  namespace: ai-demo
+metadata: {name: kserve-mock-medium-tier, namespace: ai-demo}
 spec:
   targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: HTTPRoute
-      name: kserve-mock
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock}
   traffic:
     authorization:
       action: Require
       policy:
         matchExpressions:
-          - '!("x-gateway-model-name" in request.headers) || !(request.headers["x-gateway-model-name"] in ["kimi-k3", "glm-5.3", "deepseek-v4-pro"]) || jwt.groups.exists(g, g == "platform-admins") || (has(jwt.group_paths) && jwt.group_paths.exists(g, g == "/acme/research" || g.startsWith("/acme/research/")))'
+          - '!("x-gateway-model-name" in request.headers) || request.headers["x-gateway-model-name"] != "deepseek-v4-flash" || jwt.tier in ["big", "medium"]'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: {name: kserve-mock-big-tier, namespace: ai-demo}
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: kserve-mock}
+  traffic:
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - '!("x-gateway-model-name" in request.headers) || !(request.headers["x-gateway-model-name"] in ["kimi-k3", "glm-5.3", "deepseek-v4-pro"]) || jwt.tier == "big"'

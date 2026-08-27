@@ -3,6 +3,7 @@ kind: HTTPRoute
 metadata:
   name: vllm-chat
   namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: small}
 spec:
   parentRefs: [{name: ai-gateway}]
   rules:
@@ -20,6 +21,7 @@ kind: HTTPRoute
 metadata:
   name: vllm-embedding
   namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: small}
 spec:
   parentRefs: [{name: ai-gateway}]
   rules:
@@ -36,6 +38,7 @@ kind: HTTPRoute
 metadata:
   name: vllm-rerank
   namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: small}
 spec:
   parentRefs: [{name: ai-gateway}]
   rules:
@@ -54,6 +57,7 @@ kind: HTTPRoute
 metadata:
   name: vllm-transcription
   namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: small}
 spec:
   parentRefs: [{name: ai-gateway}]
   rules:

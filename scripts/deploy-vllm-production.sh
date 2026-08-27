@@ -16,10 +16,35 @@ action=${2:-}
 # Known comparison contexts use their self-contained gateway tree. Preserve
 # the former shared path for arbitrary external GPU contexts.
 PRODUCTION_MANIFESTS="$ROOT/kserve/production"
+PRODUCTION_POLICIES=""
+REQUIRED_POLICY=""
+OBSOLETE_PRODUCTION_POLICIES=()
 case "$context" in
-  kind-ai-gw-kuadrant|kind-ai-gw-envoy|kind-ai-gw-agent)
+  kind-ai-gw-kuadrant)
     select_context_components "$context"
     PRODUCTION_MANIFESTS="$COMPONENT_ROOT/kserve/production"
+    PRODUCTION_POLICIES="$PRODUCTION_MANIFESTS/policies.yaml"
+    REQUIRED_POLICY=authpolicy/kserve-mock
+    ;;
+  kind-ai-gw-envoy)
+    select_context_components "$context"
+    PRODUCTION_MANIFESTS="$COMPONENT_ROOT/kserve/production"
+    PRODUCTION_POLICIES="$PRODUCTION_MANIFESTS/policies.yaml"
+    REQUIRED_POLICY=securitypolicy/kserve-mock
+    OBSOLETE_PRODUCTION_POLICIES=(
+      securitypolicy/vllm-big-tier
+      securitypolicy/vllm-small-medium
+    )
+    ;;
+  kind-ai-gw-agent)
+    select_context_components "$context"
+    PRODUCTION_MANIFESTS="$COMPONENT_ROOT/kserve/production"
+    PRODUCTION_POLICIES="$PRODUCTION_MANIFESTS/policies.yaml"
+    REQUIRED_POLICY=agentgatewaypolicy/kserve-mock-jwt
+    OBSOLETE_PRODUCTION_POLICIES=(
+      agentgatewaypolicy/vllm-big-tier
+      agentgatewaypolicy/vllm-members
+    )
     ;;
 esac
 
@@ -36,8 +61,23 @@ if [[ "$gpu_nodes" -eq 0 ]]; then
   exit 1
 fi
 
+# The three repository-owned gateway contexts promise the same authenticated
+# tier contract. Do not install open production routes there when the shared
+# Keycloak policy layer has not been reconciled first. Arbitrary external
+# contexts retain the compatibility bundle and own their security integration.
+if [[ -n "$REQUIRED_POLICY" ]] &&
+   ! kubectl --context "$context" -n ai-demo get "$REQUIRED_POLICY" >/dev/null 2>&1; then
+  cluster=${context#kind-}
+  echo "production routes require the gateway policy layer; run 'make policies CLUSTER=$cluster' first" >&2
+  exit 1
+fi
+
 kubectl --context "$context" apply -f "$PRODUCTION_MANIFESTS/vllm-config.yaml"
 kubectl --context "$context" apply -f "$PRODUCTION_MANIFESTS/routes.yaml"
+for obsolete_policy in "${OBSOLETE_PRODUCTION_POLICIES[@]}"; do
+  kubectl --context "$context" -n ai-demo delete "$obsolete_policy" --ignore-not-found
+done
+[[ -z "$PRODUCTION_POLICIES" ]] || kubectl --context "$context" apply -f "$PRODUCTION_POLICIES"
 kubectl --context "$context" apply -f "$PRODUCTION_MANIFESTS/models.yaml"
 kubectl --context "$context" -n ai-demo wait llminferenceservice \
   --for=condition=Ready --timeout=30m \

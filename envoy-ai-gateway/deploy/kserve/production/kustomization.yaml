@@ -4,3 +4,4 @@ resources:
   - vllm-config.yaml
   - routes.yaml
   - models.yaml
+  - policies.yaml
