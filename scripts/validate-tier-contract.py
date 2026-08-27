@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -65,6 +66,48 @@ def target_names(document: dict) -> set[str]:
     if spec.get("targetRef"):
         refs = [spec["targetRef"]]
     return {ref.get("name") for ref in refs if ref.get("name")}
+
+
+def stack_gateways(stack: str) -> set[tuple[str, str]]:
+    """Every Gateway a stack's profile provisions, as (name, namespace)."""
+    return {
+        (doc["metadata"]["name"], doc["metadata"].get("namespace", "ai-demo"))
+        for doc in documents(DEPLOY[stack] / "gateway" / "gateway.yaml")
+        if doc.get("kind") == "Gateway"
+    }
+
+
+def rendered(path: Path) -> list[dict]:
+    """The overlay as `kubectl apply -k` sends it, patches included.
+
+    Reading the files directly would miss the Kustomization, which is where
+    each profile's gateway attachment lives.
+    """
+    try:
+        build = subprocess.run(
+            ["kubectl", "kustomize", str(path)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except OSError:
+        sys.exit("kubectl is required to render overlays offline")
+    except subprocess.CalledProcessError as error:
+        sys.exit(f"kubectl kustomize {path} failed: {error.stderr.strip()}")
+    return [doc for doc in yaml.safe_load_all(build.stdout) if doc]
+
+
+def gateway_refs(document: dict) -> list[tuple[str, str]]:
+    """Gateways an HTTPRoute or LLMInferenceService attaches to."""
+    spec = document.get("spec", {})
+    if document.get("kind") == "HTTPRoute":
+        refs = spec.get("parentRefs", [])
+    elif document.get("kind") == "LLMInferenceService":
+        refs = spec.get("router", {}).get("gateway", {}).get("refs", [])
+    else:
+        return []
+    own_namespace = document["metadata"].get("namespace", "ai-demo")
+    return [(ref["name"], ref.get("namespace", own_namespace)) for ref in refs]
 
 
 def agent_big_models(path: Path) -> tuple[set[str], str]:
@@ -326,6 +369,26 @@ def main() -> int:
         kustomization = yaml.safe_load((production / "kustomization.yaml").read_text())
         if "policies.yaml" not in kustomization.get("resources", []):
             problems.append(f"{stack} production kustomization omits policies.yaml")
+
+        # routes.yaml and models.yaml are byte-identical across the three trees
+        # and all name ai-gateway, so each profile's real attachment only exists
+        # once the Kustomization is rendered. Kuadrant is what this catches: it
+        # provisions no ai-demo/ai-gateway -- its one Gateway is
+        # openshift-ingress/openshift-ai-inference -- and a route left pointing
+        # at the shared name never attaches, which surfaces half an hour later
+        # as a Ready timeout rather than as an error.
+        provisioned = stack_gateways(stack)
+        unprovisioned = {
+            (doc["metadata"]["name"], ref)
+            for doc in rendered(production)
+            for ref in gateway_refs(doc)
+            if ref not in provisioned
+        }
+        if unprovisioned:
+            problems.append(
+                f"{stack} production attaches to gateways the profile does not provision: "
+                f"{sorted(unprovisioned)}; provisioned: {sorted(provisioned)}"
+            )
 
     agent_production = documents(
         DEPLOY["agentgateway"] / "kserve" / "production" / "policies.yaml"

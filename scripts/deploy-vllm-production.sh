@@ -16,20 +16,17 @@ action=${2:-}
 # Known comparison contexts use their self-contained gateway tree. Preserve
 # the former shared path for arbitrary external GPU contexts.
 PRODUCTION_MANIFESTS="$ROOT/kserve/production"
-PRODUCTION_POLICIES=""
 REQUIRED_POLICY=""
 OBSOLETE_PRODUCTION_POLICIES=()
 case "$context" in
   kind-ai-gw-kuadrant)
     select_context_components "$context"
     PRODUCTION_MANIFESTS="$COMPONENT_ROOT/kserve/production"
-    PRODUCTION_POLICIES="$PRODUCTION_MANIFESTS/policies.yaml"
     REQUIRED_POLICY=authpolicy/kserve-mock
     ;;
   kind-ai-gw-envoy)
     select_context_components "$context"
     PRODUCTION_MANIFESTS="$COMPONENT_ROOT/kserve/production"
-    PRODUCTION_POLICIES="$PRODUCTION_MANIFESTS/policies.yaml"
     REQUIRED_POLICY=securitypolicy/kserve-mock
     OBSOLETE_PRODUCTION_POLICIES=(
       securitypolicy/vllm-big-tier
@@ -39,7 +36,6 @@ case "$context" in
   kind-ai-gw-agent)
     select_context_components "$context"
     PRODUCTION_MANIFESTS="$COMPONENT_ROOT/kserve/production"
-    PRODUCTION_POLICIES="$PRODUCTION_MANIFESTS/policies.yaml"
     REQUIRED_POLICY=agentgatewaypolicy/kserve-mock-jwt
     OBSOLETE_PRODUCTION_POLICIES=(
       agentgatewaypolicy/vllm-big-tier
@@ -72,13 +68,21 @@ if [[ -n "$REQUIRED_POLICY" ]] &&
   exit 1
 fi
 
-kubectl --context "$context" apply -f "$PRODUCTION_MANIFESTS/vllm-config.yaml"
-kubectl --context "$context" apply -f "$PRODUCTION_MANIFESTS/routes.yaml"
 for obsolete_policy in "${OBSOLETE_PRODUCTION_POLICIES[@]}"; do
   kubectl --context "$context" -n ai-demo delete "$obsolete_policy" --ignore-not-found
 done
-[[ -z "$PRODUCTION_POLICIES" ]] || kubectl --context "$context" apply -f "$PRODUCTION_POLICIES"
-kubectl --context "$context" apply -f "$PRODUCTION_MANIFESTS/models.yaml"
+
+# Apply the overlay, not the files it lists. The Kuadrant profile provisions no
+# ai-demo/ai-gateway -- its only Gateway is openshift-ingress/openshift-ai-inference
+# -- so its production routes and services are attached by kustomize patches,
+# exactly as its base and pools trees are. `kubectl apply -f` bypasses those
+# patches, leaving every route unattached and this script's Ready wait to time
+# out thirty minutes later. The --delete path already uses -k.
+#
+# kustomize emits LLMInferenceServiceConfig and the routes ahead of the
+# LLMInferenceServices that reference them in baseRefs and route refs, which is
+# the ordering the previous file-by-file sequence was written to guarantee.
+kubectl --context "$context" apply -k "$PRODUCTION_MANIFESTS"
 kubectl --context "$context" -n ai-demo wait llminferenceservice \
   --for=condition=Ready --timeout=30m \
   vllm-chat vllm-embedding vllm-rerank vllm-transcription

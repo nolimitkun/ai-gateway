@@ -5,3 +5,32 @@ resources:
   - routes.yaml
   - models.yaml
   - policies.yaml
+# OpenShift profile variant, matching ../base and ../pools: this profile
+# provisions no ai-demo/ai-gateway. Its only Gateway is
+# openshift-ingress/openshift-ai-inference, whose listener admits ai-demo
+# routes by namespace label. Without these patches the production routes and
+# services keep the shared ai-gateway reference, never attach, and the
+# thirty-minute Ready wait in scripts/deploy-vllm-production.sh times out.
+patches:
+  - target:
+      group: gateway.networking.k8s.io
+      version: v1
+      kind: HTTPRoute
+    patch: |-
+      - op: replace
+        path: /spec/parentRefs/0/name
+        value: openshift-ai-inference
+      - op: add
+        path: /spec/parentRefs/0/namespace
+        value: openshift-ingress
+  - target:
+      group: serving.kserve.io
+      version: v1alpha2
+      kind: LLMInferenceService
+    patch: |-
+      - op: replace
+        path: /spec/router/gateway/refs/0/name
+        value: openshift-ai-inference
+      - op: replace
+        path: /spec/router/gateway/refs/0/namespace
+        value: openshift-ingress

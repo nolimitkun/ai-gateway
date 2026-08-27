@@ -643,10 +643,15 @@ initialization, and the same `InferencePool`/endpoint-picker data path as the
 mock. Version 0.27.0 includes the fix for
 [GHSA-7m6h-x95x-82q5](https://github.com/vllm-project/vllm/security/advisories/GHSA-7m6h-x95x-82q5).
 
-Deploy to a KServe 0.20 cluster with NVIDIA GPU nodes and an existing
-`ai-demo/ai-gateway`. On the three repository-owned contexts, reconcile
-`make policies CLUSTER=<name>` first; the deployment refuses to create open
-production routes and installs fixed-tier native policies with them:
+Deploy to a KServe 0.20 cluster with NVIDIA GPU nodes and the Gateway its
+profile provisions. The manifests are byte-identical across the three trees and
+name `ai-demo/ai-gateway`; the Kuadrant profile has no such Gateway, so its
+Kustomization repoints these routes and services at
+`openshift-ingress/openshift-ai-inference`, the same way its `kserve/base` and
+`kserve/pools` overlays do. The deploy script therefore applies the overlay
+rather than the individual files. On the three repository-owned contexts,
+reconcile `make policies CLUSTER=<name>` first; the deployment refuses to create
+open production routes and installs fixed-tier native policies with them:
 
 ```bash
 make vllm-production VLLM_CONTEXT=my-gpu-context
