@@ -31,6 +31,11 @@ actually runs, the object that put it there, and the header and body deltas,
 read from `/config_dump` on the running proxies rather than from these
 manifests. Open it in a browser; it is self-contained.
 
+[docs/open-questions.md](docs/open-questions.md) lists the decisions this
+repository has deferred -- places where the current behaviour was a side effect
+rather than a choice, or where a gap could be closed and has not been. It is
+separate from the comparison table, which records what each stack does.
+
 ## Gateway comparison
 
 This is the canonical gateway comparison. Other tables in this README describe
@@ -1135,7 +1140,7 @@ kserve/production/          arbitrary-context production vLLM compatibility bund
 mock-llm/                  deterministic multi-task CPU runtime and tests
 scripts/                   installation, deployment, validation, and lifecycle commands
 compare/                   three-gateway comparison and raw results
-docs/                      request-path walkthrough, rendered as a standalone page
+docs/                      request-path walkthrough and the deferred-decision list
 ```
 
 ## References
