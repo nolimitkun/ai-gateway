@@ -39,7 +39,9 @@ CONFIG = {
         "gateway": "ai-gateway", "gateway_ns": "ai-demo",
         "policy_condition": "Accepted",
         "policies": ["agentgatewaypolicy/kserve-mock-jwt", "agentgatewaypolicy/kserve-mock-members", "agentgatewaypolicy/kserve-mock-big-tier", "agentgatewaypolicy/kserve-mock-rate-limit", "agentgatewaypolicy/kserve-mock-cors"],
-        "router": ("ai-demo", "agentgatewaypolicy/kserve-mock-semantic-router", "Accepted"),
+        # The semantic attachment replaces the pre-routing BBR policy under its
+        # own name, so presence of the router is read from that object.
+        "router": ("ai-demo", "agentgatewaypolicy/model-body-router", "Accepted"),
     },
 }
 
@@ -352,7 +354,10 @@ def policy_summary(cfg: dict) -> tuple[bool, str]:
 
 def router_summary(cfg: dict) -> tuple[bool, str]:
     namespace, object_name, condition = cfg["router"]
-    if cfg["context"] == "kind-ai-gw-envoy" and not kube_json(
+    # Envoy and agentgateway both let the semantic attachment replace their
+    # base body-based-router policy under the same name, so the object exists
+    # either way and only the processor workload distinguishes them.
+    if cfg["context"] in ("kind-ai-gw-envoy", "kind-ai-gw-agent") and not kube_json(
         cfg, "ai-demo", "deployment/semantic-router"
     ):
         return False, "Absent"

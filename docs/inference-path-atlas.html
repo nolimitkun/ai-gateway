@@ -1,0 +1,1327 @@
+<meta charset="utf-8">
+<title>Inference Path Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+:root {
+  --ground:  #eceef1;
+  --surface: #ffffff;
+  --sunken:  #e3e6ea;
+  --ink:     #161a20;
+  --muted:   #59616c;
+  --faint:   #838c98;
+  --rule:    #d3d8de;
+  --rule-strong: #b6bec8;
+
+  --envoy:    #9e4620;
+  --agent:    #0f6a72;
+  --kuadrant: #4a3f9e;
+
+  --add:    #2e6b45;
+  --rewrite:#8a6212;
+  --stop:   #9b2f2f;
+
+  --shadow: 0 1px 2px rgba(22,26,32,.05), 0 6px 20px -12px rgba(22,26,32,.22);
+
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:  #14171c;
+    --surface: #1b1f25;
+    --sunken:  #0f1216;
+    --ink:     #e4e8ed;
+    --muted:   #9aa4b0;
+    --faint:   #6f7986;
+    --rule:    #2b313a;
+    --rule-strong: #3c4450;
+
+    --envoy:    #e08052;
+    --agent:    #4fb5b6;
+    --kuadrant: #9b90ee;
+
+    --add:    #6fbe8a;
+    --rewrite:#d6a742;
+    --stop:   #e07a76;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -14px rgba(0,0,0,.8);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:  #14171c;
+  --surface: #1b1f25;
+  --sunken:  #0f1216;
+  --ink:     #e4e8ed;
+  --muted:   #9aa4b0;
+  --faint:   #6f7986;
+  --rule:    #2b313a;
+  --rule-strong: #3c4450;
+
+  --envoy:    #e08052;
+  --agent:    #4fb5b6;
+  --kuadrant: #9b90ee;
+
+  --add:    #6fbe8a;
+  --rewrite:#d6a742;
+  --stop:   #e07a76;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -14px rgba(0,0,0,.8);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 17px;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  padding: 0 20px 96px;
+}
+
+.wrap { max-width: 1100px; margin: 0 auto; }
+.col  { max-width: 68ch; }
+
+/* ---------- masthead ---------- */
+
+.masthead {
+  padding: 72px 0 40px;
+  border-bottom: 2px solid var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.eyebrow {
+  font-family: var(--display);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+h1 {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(34px, 6.2vw, 62px);
+  line-height: 1.02;
+  letter-spacing: -.028em;
+  margin: 0;
+  text-wrap: balance;
+}
+.standfirst {
+  max-width: 62ch;
+  font-size: 20px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 0;
+}
+
+.provenance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  margin-top: 8px;
+}
+.provenance div { background: var(--ground); padding: 14px 16px; }
+.provenance dt {
+  font-family: var(--display);
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 4px;
+}
+.provenance dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* ---------- structure ---------- */
+
+section { padding-top: 64px; }
+h2 {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(25px, 3.4vw, 34px);
+  letter-spacing: -.02em;
+  line-height: 1.12;
+  margin: 0 0 6px;
+  text-wrap: balance;
+}
+h2 .sec-no {
+  font-family: var(--mono);
+  font-size: .5em;
+  font-weight: 400;
+  color: var(--faint);
+  margin-right: .9em;
+  vertical-align: .35em;
+  letter-spacing: 0;
+}
+h3 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 19px;
+  letter-spacing: -.01em;
+  margin: 40px 0 10px;
+}
+.deck { color: var(--muted); margin: 0 0 26px; max-width: 68ch; }
+p { margin: 0 0 16px; max-width: 68ch; }
+a { color: inherit; text-underline-offset: 3px; }
+
+code, .mono { font-family: var(--mono); font-size: .855em; }
+p code, li code, td code, th code, dd code {
+  background: var(--sunken);
+  padding: .1em .38em;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+ul.notes { padding-left: 1.1em; margin: 0 0 16px; max-width: 68ch; }
+ul.notes li { margin-bottom: 8px; }
+
+/* ---------- contents ---------- */
+
+.toc {
+  margin-top: 44px;
+  border-top: 1px solid var(--rule);
+  padding-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 28px;
+}
+.toc a {
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid transparent;
+}
+.toc a:hover, .toc a:focus-visible { color: var(--ink); border-bottom-color: var(--rule-strong); }
+.toc span { font-family: var(--mono); color: var(--faint); }
+
+/* ---------- stack banner ---------- */
+
+.stack { --hue: var(--ink); }
+.stack.envoy    { --hue: var(--envoy); }
+.stack.agent    { --hue: var(--agent); }
+.stack.kuadrant { --hue: var(--kuadrant); }
+
+.stack-head {
+  border-top: 3px solid var(--hue);
+  padding-top: 14px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+}
+.stack-head h2 { color: var(--hue); margin: 0; }
+.stack-meta {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--faint);
+}
+
+/* ---------- hop rail ---------- */
+
+.rail { list-style: none; margin: 26px 0 0; padding: 0; position: relative; }
+.rail::before {
+  content: "";
+  position: absolute;
+  left: 15px; top: 12px; bottom: 12px;
+  width: 2px;
+  background: var(--rule);
+}
+.hop {
+  position: relative;
+  padding-left: 52px;
+  margin-bottom: 18px;
+}
+.hop-no {
+  position: absolute;
+  left: 0; top: 0;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--hue);
+  color: var(--hue);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+  z-index: 1;
+}
+.hop.passive .hop-no { border-color: var(--rule-strong); color: var(--faint); }
+
+.hop-card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.hop-top {
+  padding: 13px 16px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.hop-name {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.res {
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--hue);
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.res.none { color: var(--faint); }
+.hop-body { padding: 0 16px 14px; font-size: 15.5px; color: var(--muted); }
+.hop-body p { margin: 0 0 10px; max-width: none; }
+.hop-body p:last-child { margin-bottom: 0; }
+.hop-body strong { color: var(--ink); font-weight: 600; }
+
+/* ---------- delta block ---------- */
+
+.delta {
+  border-top: 1px solid var(--rule);
+  background: var(--sunken);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.75;
+  padding: 11px 16px;
+  overflow-x: auto;
+}
+.delta div { white-space: pre; }
+.delta .sig { display: inline-block; width: 1.4em; font-weight: 600; }
+.delta .a .sig { color: var(--add); }
+.delta .r .sig { color: var(--rewrite); }
+.delta .x .sig { color: var(--stop); }
+.delta .k { color: var(--ink); }
+.delta .c { color: var(--faint); }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 22px 0 0;
+  padding: 10px 14px;
+  background: var(--sunken);
+  border-left: 2px solid var(--rule-strong);
+}
+.legend b { font-weight: 600; }
+.legend .a b { color: var(--add); }
+.legend .r b { color: var(--rewrite); }
+.legend .x b { color: var(--stop); }
+
+/* ---------- tables ---------- */
+
+.tablewrap { overflow-x: auto; margin: 24px 0 8px; border: 1px solid var(--rule); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 620px; }
+th, td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+  font-size: 14.5px;
+  font-family: var(--display);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+thead th {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  background: var(--sunken);
+  white-space: nowrap;
+}
+thead th.c-envoy    { color: var(--envoy); }
+thead th.c-agent    { color: var(--agent); }
+thead th.c-kuadrant { color: var(--kuadrant); }
+tbody tr:last-child td { border-bottom: none; }
+td.lab { font-weight: 600; color: var(--ink); white-space: nowrap; }
+td .m { font-family: var(--mono); font-size: 12.5px; }
+td.good .m, td .m.good { color: var(--add); }
+td.bad  .m, td .m.bad  { color: var(--stop); }
+td.warn .m, td .m.warn { color: var(--rewrite); }
+
+caption {
+  caption-side: bottom;
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--faint);
+  border-top: 1px solid var(--rule);
+}
+
+/* ---------- route list ---------- */
+
+.routes {
+  margin: 24px 0 0;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  overflow-x: auto;
+}
+.routes ol { margin: 0; padding: 0; list-style: none; min-width: 560px; }
+.routes li {
+  display: grid;
+  grid-template-columns: 42px 1.4fr 1.5fr 1fr;
+  gap: 14px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  align-items: baseline;
+}
+.routes li:last-child { border-bottom: none; }
+.routes li.hdr {
+  background: var(--sunken);
+  font-family: var(--display);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.routes li.fallback { background: var(--sunken); }
+.routes .idx { color: var(--faint); }
+.routes .pool { color: var(--muted); }
+
+/* ---------- callout ---------- */
+
+.callout {
+  margin: 30px 0;
+  padding: 20px 22px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--rewrite);
+  border-radius: 3px;
+  box-shadow: var(--shadow);
+}
+.callout h3 { margin: 0 0 8px; font-size: 17px; }
+.callout p:last-child { margin-bottom: 0; }
+.callout .tag {
+  font-family: var(--display);
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--rewrite);
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* ---------- trace grid ---------- */
+
+.trace {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+  margin-top: 26px;
+}
+.trace-card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--hue);
+  border-radius: 3px;
+  box-shadow: var(--shadow);
+  padding: 16px 18px 18px;
+}
+.trace-card h3 { margin: 0 0 12px; font-size: 16px; color: var(--hue); }
+.trace-card ol { margin: 0; padding-left: 1.25em; font-size: 14.5px; color: var(--muted); }
+.trace-card li { margin-bottom: 7px; }
+.trace-card li::marker { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+.trace-card .out {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+.trace-card .out .k { color: var(--faint); }
+
+footer {
+  margin-top: 80px;
+  padding-top: 22px;
+  border-top: 1px solid var(--rule);
+  font-size: 14px;
+  color: var(--faint);
+  max-width: 68ch;
+}
+
+@media (max-width: 620px) {
+  body { font-size: 16px; }
+  .hop { padding-left: 42px; }
+  .rail::before { left: 13px; }
+  .hop-no { width: 28px; height: 28px; font-size: 11.5px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">ai-gateway &middot; branch claude/mock-more-models-ivqcly</div>
+  <h1>Inference Path Atlas</h1>
+  <p class="standfirst">One OpenAI chat completion, traced hop by hop through all three gateway stacks &mdash; every filter in the order it actually runs, the Kubernetes object that put it there, and what it does to the headers and the body on the way past.</p>
+
+  <dl class="provenance">
+    <div><dt>Measured</dt><dd>2026-08-27<br>three live kind clusters</dd></div>
+    <div><dt>Filter order</dt><dd>Envoy <span class="mono">/config_dump</span><br>read off the running proxy</dd></div>
+    <div><dt>Header deltas</dt><dd>echoed by the KServe<br>mock runtime at the pod</dd></div>
+    <div><dt>Identity</dt><dd>Keycloak realm<br><span class="mono">ai-gateway</span></dd></div>
+    <div><dt>Since first published</dt><dd>agentgateway auto<br>routing fixed &mdash; §07</dd></div>
+  </dl>
+
+  <nav class="toc">
+    <a href="#routes"><span>01</span> The route table all three share</a>
+    <a href="#envoy"><span>02</span> Envoy AI Gateway</a>
+    <a href="#agent"><span>03</span> agentgateway</a>
+    <a href="#kuadrant"><span>04</span> Kuadrant on Istio</a>
+    <a href="#auto"><span>05</span> One request, three orderings</a>
+    <a href="#arrives"><span>06</span> What reaches the pod</a>
+    <a href="#slot"><span>07</span> The cost of one pre-routing slot</a>
+    <a href="#gate"><span>08</span> Whose model does the gate judge?</a>
+    <a href="#found"><span>09</span> What the trace turned up</a>
+  </nav>
+</header>
+
+<!-- ===================================================== -->
+<section id="routes">
+  <h2><span class="sec-no">01</span>The route table all three share</h2>
+  <p class="deck">Same <code>HTTPRoute/kserve-mock</code>, same sixteen rules, same names, in all three clusters. That is the point of the comparison: the routing semantics are held constant so the difference between the stacks is the policy chain around them, not the matcher.</p>
+
+  <p>An OpenAI client names its model in the JSON body. Gateway API matches on paths and headers. The bridge is the Gateway API Inference Extension <strong>body-based router</strong> (BBR): it reads <code>body.model</code>, writes it into the internal <code>x-gateway-model-name</code> header, and clears Envoy's route cache so the match runs again against the header it just set.</p>
+
+  <p>So the twelve model rules below are unreachable on the first pass and decisive on the second. The four unheadered rules at the bottom are the fallback: they catch anything BBR did not resolve to a known model, plus the model catalog and multipart audio, which BBR skips because it parses JSON only.</p>
+
+  <div class="routes">
+    <ol>
+      <li class="hdr"><span>#</span><span>rule name</span><span>match</span><span>InferencePool</span></li>
+      <li><span class="idx">0</span><span>model-kimi-k3</span><span>POST /v1/chat/completions + <span class="k">kimi-k3</span></span><span class="pool">kserve-b300</span></li>
+      <li><span class="idx">1</span><span>model-glm-5-3</span><span>POST /v1/chat/completions + <span class="k">glm-5.3</span></span><span class="pool">kserve-b300</span></li>
+      <li><span class="idx">2</span><span>model-deepseek-v4-pro</span><span>POST /v1/chat/completions + <span class="k">deepseek-v4-pro</span></span><span class="pool">kserve-b300</span></li>
+      <li><span class="idx">3</span><span>model-deepseek-v4-flash</span><span>POST /v1/chat/completions + <span class="k">deepseek-v4-flash</span></span><span class="pool">kserve-h200</span></li>
+      <li><span class="idx">4</span><span>model-qwen3-8-27b</span><span>POST /v1/chat/completions + <span class="k">qwen3.8-27b</span></span><span class="pool">kserve-h100</span></li>
+      <li><span class="idx">5</span><span>model-qwen3-embedding-8b</span><span>POST /v1/embeddings + <span class="k">qwen3-embedding-8b</span></span><span class="pool">kserve-h100</span></li>
+      <li><span class="idx">6</span><span>model-e5-mistral-7b-instruct</span><span>POST /v1/embeddings + <span class="k">e5-mistral-7b-instruct</span></span><span class="pool">kserve-h100</span></li>
+      <li><span class="idx">7</span><span>model-bge-m3</span><span>POST /v1/embeddings + <span class="k">bge-m3</span></span><span class="pool">kserve-l40s</span></li>
+      <li><span class="idx">8</span><span>model-jina-embeddings-v3</span><span>POST /v1/embeddings + <span class="k">jina-embeddings-v3</span></span><span class="pool">kserve-l40s</span></li>
+      <li><span class="idx">9</span><span>model-nomic-embed-text-v2-moe</span><span>POST /v1/embeddings + <span class="k">nomic-embed-text-v2-moe</span></span><span class="pool">kserve-l40s</span></li>
+      <li><span class="idx">10</span><span>model-bge-reranker-v2-m3</span><span>POST /v1/rerank + <span class="k">bge-reranker-v2-m3</span></span><span class="pool">kserve-l40s</span></li>
+      <li><span class="idx">11</span><span>model-jina-reranker-v2-base-&#8203;multilingual</span><span>POST /v1/rerank + <span class="k">jina-reranker-…</span></span><span class="pool">kserve-l40s</span></li>
+      <li class="fallback"><span class="idx">12</span><span>chat</span><span>POST /v1/chat/completions</span><span class="pool">kserve-mock (CPU)</span></li>
+      <li class="fallback"><span class="idx">13</span><span>embeddings</span><span>POST /v1/embeddings</span><span class="pool">kserve-mock (CPU)</span></li>
+      <li class="fallback"><span class="idx">14</span><span>rerank</span><span>POST /v1/rerank</span><span class="pool">kserve-mock (CPU)</span></li>
+      <li class="fallback"><span class="idx">15</span><span>inference</span><span>prefix /v1 &mdash; catalog, audio, everything else</span><span class="pool">kserve-mock (CPU)</span></li>
+    </ol>
+  </div>
+
+  <p style="margin-top:18px">A second <code>HTTPRoute/keycloak</code> carries <code>/realms</code> to the Keycloak service on the same listener, so token issuance and inference share one port and one Gateway. Envoy sorts it between the model rules and the <code>/v1</code> prefix rule by ordinary Gateway API precedence &mdash; longer path first, header matches before bare paths.</p>
+
+  <p>Envoy AI Gateway carries one route the other two do not: <code>AIGatewayRoute/kserve-mock-ai</code>, pinned to the <code>ai.local</code> hostname. It exists only so the AI Gateway processor can parse the response and publish token counts as dynamic metadata; everything else stays on the shared route.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="envoy" class="stack envoy">
+  <div class="stack-head">
+    <h2><span class="sec-no">02</span>Envoy AI Gateway</h2>
+    <span class="stack-meta">11 HTTP filters &middot; read from <span class="mono">/config_dump</span> on <span class="mono">ai-demo/ai-gateway/http</span></span>
+  </div>
+  <p class="deck">Everything is a typed Gateway API policy, and the resulting Envoy filter chain is legible: authenticate, transform, authorize, meter, pick an endpoint. Authentication happens before any external processor runs, and authorization happens after &mdash; which is exactly what lets the RBAC rules match a header BBR invented.</p>
+
+  <ol class="rail">
+
+    <li class="hop">
+      <div class="hop-no">1</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">envoy.filters.http.cors</span>
+          <span class="res">SecurityPolicy · .cors</span>
+        </div>
+        <div class="hop-body"><p>Preflight is answered here and goes no further. A live <code>OPTIONS</code> from the allowed origin returned <strong>200</strong> with the three <code>access-control-allow-*</code> headers and an empty body.</p></div>
+        <div class="delta">
+          <div class="a"><span class="sig">+</span><span class="k">access-control-allow-origin: https://console.example.com</span>  <span class="c">(response, preflight only)</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">access-control-allow-methods: GET, POST, OPTIONS</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">2</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">envoy.filters.http.jwt_authn</span>
+          <span class="res">SecurityPolicy · .jwt</span>
+        </div>
+        <div class="hop-body">
+          <p>Verifies the Keycloak access token against the realm JWKS, cached five minutes. On success <code>claimToHeaders</code> flattens four claims into request headers &mdash; this is the only reason the rate limit descriptors downstream have anything identity-shaped to key on, because Envoy's limit actions match headers, never claims.</p>
+          <p>The failure is a local reply, so nothing upstream is contacted.</p>
+        </div>
+        <div class="delta">
+          <div class="a"><span class="sig">+</span><span class="k">x-user-id: alice</span>          <span class="c">← preferred_username</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-auth-plan: gold</span>         <span class="c">← plan</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-org-id: acme</span>            <span class="c">← org   (absent for admins)</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-team-id: research</span>       <span class="c">← team  (absent for admins)</span></div>
+          <div class="x"><span class="sig">✕</span><span class="k">401 · www-authenticate: Bearer realm="…" · body "Jwt is missing"</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop passive">
+      <div class="hop-no">3</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">ext_proc/aigateway</span>
+          <span class="res">AIGatewayRoute · kserve-mock-ai</span>
+        </div>
+        <div class="hop-body"><p>Active on the <code>ai.local</code> virtual host only. On the response it parses the OpenAI <code>usage</code> object and writes the counts into dynamic metadata under <code>io.envoy.ai_gateway</code>, where the rate limit filter can charge them as a cost. It is the only reason a token budget is expressible on this stack at all.</p></div>
+        <div class="delta">
+          <div class="a"><span class="sig">+</span><span class="k">metadata io.envoy.ai_gateway:llm_input_token / llm_output_token / llm_total_token</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">4</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">ext_proc/…/model-body-router-chat/extproc/<b>0</b></span>
+          <span class="res">EnvoyExtensionPolicy</span>
+        </div>
+        <div class="hop-body">
+          <p><strong>vLLM Semantic Router</strong>, first element of the ordered <code>extProc</code> list, attached to the chat sections only. The request body is buffered so the router can read the prompt; <code>failOpen: true</code>, so a router that is down leaves the request untouched.</p>
+          <p>It resolves the auto aliases and forwards a concrete model name unchanged. A matched decision may also replace the system prompt.</p>
+        </div>
+        <div class="delta">
+          <div class="r"><span class="sig">~</span><span class="k">body.model: "auto" → "kimi-k3"</span>              <span class="c">decision deep-reasoning</span></div>
+          <div class="r"><span class="sig">~</span><span class="k">body.messages[0]: system prompt replaced</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-selected-model: kimi-k3</span>                   <span class="c">(request)</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-vsr-selected-decision / -model / -confidence / -matched-keywords</span>  <span class="c">(response)</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop passive">
+      <div class="hop-no">5</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">ext_proc/…/model-body-router-tasks/extproc/0</span>
+          <span class="res">EnvoyExtensionPolicy</span>
+        </div>
+        <div class="hop-body"><p>The same BBR image, attached to the <code>embeddings</code> and <code>rerank</code> sections. Chat traffic skips it; the semantic router never sees an embeddings body, which is deliberate &mdash; the router implements OpenAI chat only.</p></div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">6</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">ext_proc/…/model-body-router-chat/extproc/<b>1</b></span>
+          <span class="res">Backend · body-based-router</span>
+        </div>
+        <div class="hop-body">
+          <p><strong>Body-based router</strong>, second element of the same chain, so it reads the body the semantic router just rewrote. It sets the internal routing header and clears the route cache. <code>failOpen: false</code>: pool selection is part of the serving path, not an optimisation.</p>
+          <p>It is attached to the base <code>chat</code> section <em>and</em> to all five model sections, so a client-forged header is overwritten even when that header steered the first match. Measured: forging <code>x-gateway-model-name: kimi-k3</code> with <code>body.model: mock-kserve</code> landed on the CPU pod.</p>
+        </div>
+        <div class="delta">
+          <div class="r"><span class="sig">~</span><span class="k">x-gateway-model-name: &lt;forged or absent&gt; → kimi-k3</span>   <span class="c">← body.model</span></div>
+          <div class="a"><span class="sig">↻</span><span class="k">route cache cleared → rule 12 (chat) re-matches to rule 0 (model-kimi-k3)</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">7</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">envoy.filters.http.rbac</span>
+          <span class="res">SecurityPolicy · .authorization</span>
+        </div>
+        <div class="hop-body">
+          <p><code>defaultAction: Deny</code> and four first-match-wins rules. Because this sits <em>after</em> BBR, the rules can name <code>x-gateway-model-name</code> &mdash; a value no client can supply.</p>
+          <p>Order is load-bearing: the entitlement rule must sit above the big-tier <code>Deny</code> or it is unreachable. Both the <code>org</code> and <code>team</code> claims are matched, because a team name is unique only inside its org.</p>
+        </div>
+        <div class="delta">
+          <div class="c"><span class="sig"> </span>1 admins-reach-every-model        <span class="k">Allow</span>  groups ∋ platform-admins</div>
+          <div class="c"><span class="sig"> </span>2 acme-research-is-entitled…      <span class="k">Allow</span>  org=acme ∧ team=research ∧ model ∈ B300</div>
+          <div class="c"><span class="sig"> </span>3 big-tier-models-are-admin-only  <span class="k">Deny</span>   model ∈ B300</div>
+          <div class="c"><span class="sig"> </span>4 model-users                     <span class="k">Allow</span>  groups ∋ model-users</div>
+          <div class="x"><span class="sig">✕</span><span class="k">403 · body "RBAC: access denied"</span>   <span class="c">measured for frank (globex/research)</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">8</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">envoy.filters.http.ratelimit</span>
+          <span class="res">BackendTrafficPolicy</span>
+        </div>
+        <div class="hop-body">
+          <p>One filter, domain <code>ai-demo/ai-gateway/http</code>, counters in Redis. Seven rules compile to eight descriptor sets attached per route, and every set opens with a <code>generic_key</code> whose value is the route rule name.</p>
+          <p>That first action is the whole story behind the doubled tenant ceiling: <code>kserve-mock/rule/12</code> and <code>kserve-mock-ai/rule/0</code> are different descriptors, so the same org gets one budget on each route. The alternative &mdash; <code>shared: true</code> &mdash; emits a second filter with a second domain and silently unhooks the token budget, which is why it is off here.</p>
+        </div>
+        <div class="delta">
+          <div class="a"><span class="sig">+</span><span class="k">x-ratelimit-limit: 5, 5;w=60, 20000;w=86400, 100;w=60</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-ratelimit-remaining: 4</span>   <span class="c">measured with x-rate-limit-probe: true</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-ratelimit-reset: 28</span></div>
+          <div class="x"><span class="sig">✕</span><span class="k">429 on request 6 of 8 · token budget 429 on request 3 of 6</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">9</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">ext_proc/endpointpicker/&lt;pool&gt;</span>
+          <span class="res">InferencePool · KServe EPP</span>
+        </div>
+        <div class="hop-body"><p>One filter instance per <code>InferencePool</code>; the route's backend selects which one applies. KServe's llm-d endpoint picker chooses the replica and stamps the choice on the response.</p></div>
+        <div class="delta">
+          <div class="a"><span class="sig">+</span><span class="k">x-session-token: &lt;base64 pod identity&gt;</span>   <span class="c">(response)</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-went-into-resp-headers: true</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop passive">
+      <div class="hop-no">10</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">header_to_metadata → router</span>
+          <span class="res none">Envoy built-in</span>
+        </div>
+        <div class="hop-body"><p>Dispatch to the chosen pod. The response body is not rewritten by any gateway filter on the way back &mdash; the <code>mock_*</code> fields in it are the fixture describing what it received.</p></div>
+      </div>
+    </li>
+  </ol>
+
+  <div class="legend">
+    <span class="a"><b>+</b> added</span>
+    <span class="r"><b>~</b> rewritten</span>
+    <span class="x"><b>✕</b> short-circuits here</span>
+    <span><b>↻</b> re-routes</span>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="agent" class="stack agent">
+  <div class="stack-head">
+    <h2><span class="sec-no">03</span>agentgateway</h2>
+    <span class="stack-meta">policy-phase ordering &middot; not an Envoy proxy, so no filter dump to read</span>
+  </div>
+  <p class="deck">Five policies against one route plus one against the Gateway, all in a single CRD. The ordering that matters here is not a filter list but a declared <em>phase</em> &mdash; and this stack has exactly one external-processing slot per phase, which is the constraint the whole chat path is built around. See section 07.</p>
+
+  <ol class="rail">
+
+    <li class="hop">
+      <div class="hop-no">1</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">traffic.extProc · phase: PreRouting <span style="font-weight:400">— chat arm</span></span>
+          <span class="res">AgentgatewayPolicy · model-body-router</span>
+        </div>
+        <div class="hop-body">
+          <p>Targets the <strong>Gateway</strong>, not the route, and runs before a route is chosen. The conditional's first arm sends <code>POST /v1/chat/completions</code> to the <strong>semantic router</strong>, which resolves the auto aliases and forwards a concrete model unchanged.</p>
+          <p>The method is part of the condition. Without it an <code>OPTIONS</code> preflight reaches a chat-only processor and is answered <code>405</code> before the CORS policy ever runs &mdash; measured, and fixed.</p>
+        </div>
+        <div class="delta">
+          <div class="r"><span class="sig">~</span><span class="k">body.model: "auto" → "kimi-k3"</span>   <span class="c">· system prompt replaced</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-selected-model: kimi-k3</span>        <span class="c">(request) · x-vsr-* (response)</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">2</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">traffic.extProc · phase: PreRouting <span style="font-weight:400">— task arm</span></span>
+          <span class="res">same policy, second condition</span>
+        </div>
+        <div class="hop-body">
+          <p><code>POST /v1/embeddings</code> and <code>/v1/rerank</code> go to <strong>BBR</strong> instead, through a native <code>AgentgatewayBackend</code> with HTTP/2 and verification disabled &mdash; BBR mints a fresh self-signed certificate every start. The semantic router would answer these with a chat-only 404.</p>
+          <p>Only one arm ever runs: the conditional is first-match-wins.</p>
+        </div>
+        <div class="delta">
+          <div class="r"><span class="sig">~</span><span class="k">x-gateway-model-name := body.model</span>   <span class="c">tasks only</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">3</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">traffic.transformation · phase: PreRouting</span>
+          <span class="res">same policy, different field</span>
+        </div>
+        <div class="hop-body">
+          <p>Chat never reaches BBR, so the routing header comes from the router instead: <code>x-gateway-model-name := x-selected-model</code>. <code>transformation</code> is a different field from <code>extProc</code>, so it merges with the block above rather than replacing it.</p>
+          <p>Verified on a live cluster that <code>extProc</code> runs <em>before</em> <code>transformation</code> within the phase &mdash; a probe transformation read a header the processor had just set.</p>
+          <p>Conditional, with no fallback arm. An unconditional rule wipes the header BBR writes for the task paths; measured, <code>bge-m3</code> fell from the l40s pool back to the shared CPU fixture.</p>
+        </div>
+        <div class="delta">
+          <div class="r"><span class="sig">~</span><span class="k">x-gateway-model-name := request.headers["x-selected-model"]</span></div>
+          <div class="c"><span class="sig"> </span>chat with no selection → header cleared, so a forged value cannot survive</div>
+          <div class="c"><span class="sig"> </span>tasks → untouched, BBR's header preserved</div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop passive">
+      <div class="hop-no">4</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">route selection</span>
+          <span class="res none">HTTPRoute · kserve-mock</span>
+        </div>
+        <div class="hop-body"><p>The sixteen rules from section 01, matched once, against the header the phase above produced. There is no route-cache reset in this design because there was never a first pass to discard.</p></div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">5</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">traffic.jwtAuthentication · mode: Strict</span>
+          <span class="res">AgentgatewayPolicy · kserve-mock-jwt</span>
+        </div>
+        <div class="hop-body"><p>Keycloak issuer and audience, JWKS fetched through a <code>backendRef</code> rather than a URL. Strict means an unauthenticated request never reaches the InferencePool. Measured: <strong>401</strong>.</p>
+        <p>Nothing is exported from the token. The verified claims stay inside the proxy for CEL to read &mdash; which is why the pod sees no identity headers at all.</p></div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">6</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">traffic.authorization · action: Require</span>
+          <span class="res">kserve-mock-members + …-big-tier</span>
+        </div>
+        <div class="hop-body">
+          <p>Pure CEL over the verified claims &mdash; there is no claim-matching DSL. <code>Require</code> rules are cumulative, so a separate policy can only ever subtract access; widening the B300 class to an entitled team means editing the expression that already denies.</p>
+          <p>The org/team pair is read straight off the group path, since a subtree test is just <code>startsWith</code>. Measured: carol (<code>/acme/research</code>) 200, frank (<code>/globex/research</code>) <strong>403</strong>, and dave forging <code>x-gateway-model-name: mock-kserve</code> while asking for <code>kimi-k3</code> also <strong>403</strong> &mdash; the transformation had already overwritten his header.</p>
+        </div>
+        <div class="delta">
+          <div class="c"><span class="sig"> </span>jwt.groups.exists(g, g == "model-users")</div>
+          <div class="c"><span class="sig"> </span>!(hdr in B300) || jwt.groups ∋ platform-admins || jwt.group_paths ∋ "/acme/research"</div>
+          <div class="x"><span class="sig">✕</span><span class="k">403 · content-type text/plain · body "authorization failed"</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop passive">
+      <div class="hop-no">7</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">traffic.cors</span>
+          <span class="res">AgentgatewayPolicy · kserve-mock-cors</span>
+        </div>
+        <div class="hop-body"><p>Same origin allow-list as the Envoy stack, expressed as a traffic policy rather than a security one. Preflight measured at <strong>200</strong> &mdash; but only once the pre-routing conditions gained their method guard, since this now runs after them.</p></div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">8</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">traffic.rateLimit.conditional · local</span>
+          <span class="res">kserve-mock-rate-limit</span>
+        </div>
+        <div class="hop-body">
+          <p>Counted inside the proxy: no Redis, no limit service. The cost is that the budget is per proxy instance and the coarsest local window is an hour, so a daily quota is not expressible without the external service.</p>
+          <p>Nested org/team buckets are not expressible either, and the reason is the same first-match-wins rule that shapes the ext_proc chain above: only the first matching conditional policy executes, and that cannot charge an org counter and a team counter for the same request. Note that the authorization rules two hops up are cumulative &mdash; one API, two composition semantics.</p>
+        </div>
+        <div class="delta">
+          <div class="x"><span class="sig">✕</span><span class="k">429 on request 6 of 8 (5/min) · quota 3/hour, shared bucket</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop passive">
+      <div class="hop-no">9</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">InferencePool → KServe EPP → pod</span>
+          <span class="res none">inference.networking.k8s.io</span>
+        </div>
+        <div class="hop-body"><p>Endpoint selection is identical to the other two stacks; the same <code>x-session-token</code> and <code>x-went-into-resp-headers</code> come back. Token-based limits are unavailable on this path: agentgateway's token units need one of its own AI backends with tokenization enabled, and a Gateway API InferencePool does not publish that metadata.</p></div>
+      </div>
+    </li>
+  </ol>
+
+  <div class="callout">
+    <span class="tag">Scope note</span>
+    <h3>Hops 5&ndash;8 are ordered by policy shape, not by a config dump</h3>
+    <p>agentgateway is not Envoy, so there is no <code>/config_dump</code> to read the intra-route order off. Four boundaries were measured directly: ext_proc runs before routing (a forged header is overwritten and the pool changes), <code>extProc</code> runs before <code>transformation</code> within the phase, CORS runs after the pre-routing phase (the 405 above), and JWT runs before authorization (401 without a token, 403 with a valid one). The relative order of rate limit against the rest of the route phase is taken from the policy definitions.</p>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="kuadrant" class="stack kuadrant">
+  <div class="stack-head">
+    <h2><span class="sec-no">04</span>Kuadrant on Istio</h2>
+    <span class="stack-meta">11 HTTP filters &middot; read from <span class="mono">/config_dump</span> on the OpenShift-profile Gateway</span>
+  </div>
+  <p class="deck">The one stack with no Gateway API surface for external processing, so both processors are raw <code>EnvoyFilter</code> patches. The consequence shows up in the ordering: Kuadrant's own policies all live in a single wasm filter near the end of the chain, which means every request is routed, transformed, and endpoint-picked <em>before</em> anyone checks who sent it.</p>
+
+  <ol class="rail">
+
+    <li class="hop">
+      <div class="hop-no">1</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">ai.gateway.semantic_router</span>
+          <span class="res">EnvoyFilter · semantic-router</span>
+        </div>
+        <div class="hop-body">
+          <p><code>INSERT_FIRST</code>. Disabled at the virtual host and re-enabled per route on the six chat rules, so task APIs and Keycloak bypass a chat-only processor instead of collecting its 404. A <code>DestinationRule</code> disables mTLS toward it, because the router terminates plaintext h2c and is not in the mesh &mdash; without that the handshake fails and, since the filter fails open, every request would quietly route as though no router were installed.</p>
+        </div>
+        <div class="delta">
+          <div class="r"><span class="sig">~</span><span class="k">body.model: "auto" → "kimi-k3"</span> <span class="c">· system prompt replaced</span></div>
+          <div class="a"><span class="sig">+</span><span class="k">x-selected-model</span> <span class="c">(request) · x-vsr-* (response)</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop passive">
+      <div class="hop-no">2</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">istio.metadata_exchange</span>
+          <span class="res none">Istio built-in</span>
+        </div>
+        <div class="hop-body"><p>Mesh telemetry. No effect on the request.</p></div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">3</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">ai.gateway.body_based_router</span>
+          <span class="res">EnvoyFilter · model-body-router</span>
+        </div>
+        <div class="hop-body">
+          <p><code>INSERT_BEFORE</code> the canonical <code>ext_proc</code> name, which is how it lands immediately ahead of KServe's endpoint picker. A distinct filter name is required: the EPP's per-route override would otherwise replace this filter's gRPC service.</p>
+          <p>The per-route overrides are exact-name matches, so all fifteen route names are enumerated by hand. That verbosity is the price of having no policy API for this.</p>
+        </div>
+        <div class="delta">
+          <div class="r"><span class="sig">~</span><span class="k">x-gateway-model-name := body.model</span>  <span class="c">← the body the router rewrote</span></div>
+          <div class="a"><span class="sig">↻</span><span class="k">route cache cleared → re-matches to model-kimi-k3</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">4</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">envoy.filters.http.ext_proc</span>
+          <span class="res">InferencePool · KServe EPP</span>
+        </div>
+        <div class="hop-body"><p>Endpoint selection &mdash; and note where it sits. On a request with no token at all, the measured 401 still carried an <code>x-session-token</code>, which is the endpoint picker's stamp. The pod was chosen before the caller was identified.</p></div>
+      </div>
+    </li>
+
+    <li class="hop passive">
+      <div class="hop-no">5</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">grpc_stats · istio.alpn · fault · cors · istio.stats</span>
+          <span class="res none">Istio built-in</span>
+        </div>
+        <div class="hop-body"><p>The CORS filter is present but unconfigured: no Kuadrant policy in this repository writes a CORS rule, and a preflight measures <strong>405</strong> rather than an allow-list. That is a real gap in the column, not a rendering of it.</p></div>
+      </div>
+    </li>
+
+    <li class="hop">
+      <div class="hop-no">6</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">envoy.filters.http.wasm</span>
+          <span class="res">AuthPolicy + RateLimitPolicy + TokenRateLimitPolicy</span>
+        </div>
+        <div class="hop-body">
+          <p>One filter carrying all of Kuadrant. Authorino verifies the token; three <code>when</code>-gated rules check the B300 class against <code>x-gateway-model-name</code>, which works precisely because BBR ran three hops earlier. Authorization patterns are ANDed, <code>any</code> arms are ORed, and the entitled arm nests <code>all</code> inside <code>any</code> so binding the org does not lock out admins, who carry no <code>org</code> claim.</p>
+          <p>On success Authorino injects four identity headers toward the upstream. Limitador then counts, and the token budget charges <code>usage.total_tokens</code> off the response.</p>
+        </div>
+        <div class="delta">
+          <div class="a"><span class="sig">+</span><span class="k">x-auth-user: alice · x-auth-plan: gold · x-auth-org · x-auth-team</span></div>
+          <div class="x"><span class="sig">✕</span><span class="k">401 · x-ext-auth-reason: "a Keycloak access token is required; POST /realms/…"</span></div>
+          <div class="x"><span class="sig">✕</span><span class="k">403 · x-ext-auth-reason: "the token identity is not allowed to call this model class"</span></div>
+          <div class="x"><span class="sig">✕</span><span class="k">429 · token budget spent on request 4 of 6 (100/min)</span></div>
+        </div>
+      </div>
+    </li>
+
+    <li class="hop passive">
+      <div class="hop-no">7</div>
+      <div class="hop-card">
+        <div class="hop-top">
+          <span class="hop-name">router → pod</span>
+          <span class="res none">Envoy built-in</span>
+        </div>
+        <div class="hop-body"><p>The upstream is reached last, on the endpoint chosen at hop 4.</p></div>
+      </div>
+    </li>
+  </ol>
+
+  <div class="callout">
+    <span class="tag">Consequence of the ordering</span>
+    <h3>The four injected identity headers cannot key a rate limit here</h3>
+    <p>Authorino adds <code>x-auth-org</code> and <code>x-auth-team</code> <em>toward the upstream</em>, so they are not in <code>request.headers</code> when the rate limit action in the same wasm filter evaluates its CEL counters. Three keyings were measured against the nested tenant limits: <code>auth.identity.*</code> is unenforced, the injected headers are unenforced, and a client-supplied <code>x-auth-org</code> <em>is</em> enforced &mdash; and is therefore forgeable, which is not a tenancy control. The nesting row in the comparison reads <span class="mono">unenforced</span> for exactly this reason.</p>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="auto">
+  <h2><span class="sec-no">05</span>One request, three orderings</h2>
+  <p class="deck">The clearest way to see what the filter order buys you: send <code>{"model": "auto"}</code> with a prompt that asks for a proof, and watch where it lands. All three routers make the same decision, and all three now act on it &mdash; but by three different mechanisms, and one of them had to be rebuilt to get there.</p>
+
+  <div class="trace">
+    <div class="trace-card stack envoy">
+      <h3>Envoy AI Gateway</h3>
+      <ol>
+        <li>jwt_authn stamps <code>x-user-id</code></li>
+        <li><strong>Semantic router</strong> rewrites <code>body.model</code> to <code>kimi-k3</code></li>
+        <li><strong>BBR</strong> reads the rewritten body, sets <code>x-gateway-model-name: kimi-k3</code>, clears the route cache</li>
+        <li>Re-match selects rule 0, <code>kserve-b300</code></li>
+        <li>rbac allows, ratelimit charges, EPP picks a B300 replica</li>
+      </ol>
+      <div class="out">
+        <span class="k">served by</span> kserve-b300-kserve-…<br>
+        <span class="k">accelerator</span> b300
+      </div>
+    </div>
+
+    <div class="trace-card stack agent">
+      <h3>agentgateway</h3>
+      <ol>
+        <li><strong>Semantic router</strong> holds the one pre-routing slot for chat; rewrites <code>body.model</code> to <code>kimi-k3</code> and sets <code>x-selected-model</code></li>
+        <li><strong>Transformation</strong>, still pre-routing, copies it into <code>x-gateway-model-name</code></li>
+        <li>Route match selects the <code>model-kimi-k3</code> rule, pool <code>kserve-b300</code></li>
+        <li>JWT, authorization, CORS, rate limit</li>
+        <li>EPP picks a B300 replica</li>
+      </ol>
+      <div class="out">
+        <span class="k">served by</span> kserve-b300-kserve-…<br>
+        <span class="k">accelerator</span> b300
+      </div>
+    </div>
+
+    <div class="trace-card stack kuadrant">
+      <h3>Kuadrant</h3>
+      <ol>
+        <li><strong>Semantic router</strong> <code>INSERT_FIRST</code> rewrites <code>body.model</code> to <code>kimi-k3</code></li>
+        <li><strong>BBR</strong> reads the rewritten body and clears the route cache</li>
+        <li>Re-match selects <code>model-kimi-k3</code>, pool <code>kserve-b300</code></li>
+        <li>EPP picks a B300 replica</li>
+        <li>The wasm filter authenticates and meters &mdash; last</li>
+      </ol>
+      <div class="out">
+        <span class="k">served by</span> kserve-b300-kserve-…<br>
+        <span class="k">accelerator</span> b300
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top:26px">The <code>auto_pools</code> row in the repository's own comparison table had been recording the gap all along &mdash; <span class="mono">b300 / h200 / h100</span> for Envoy and Kuadrant, <span class="mono">all / all / all</span> for agentgateway. The model choice was right in every column; on agentgateway it simply did not reach the scheduler in time to change the hardware, because BBR held the pre-routing slot and the semantic router attached to the route, which by definition exists only after routing.</p>
+
+  <p>That row now reads <span class="mono">b300 / h200 / h100</span> in all three columns. What it took is section 07.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="arrives">
+  <h2><span class="sec-no">06</span>What reaches the pod, and what comes back</h2>
+  <p class="deck">Measured at the KServe mock runtime, which echoes the headers it received, and at the client. The three stacks make three different choices about whether the verified identity travels any further than the proxy.</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>At the upstream pod</th>
+          <th class="c-envoy">Envoy AI Gateway</th>
+          <th class="c-agent">agentgateway</th>
+          <th class="c-kuadrant">Kuadrant</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="lab">Identity headers</td>
+          <td><span class="m">x-user-id: alice<br>x-auth-plan: gold</span></td>
+          <td><span class="m warn">none</span></td>
+          <td><span class="m">x-auth-user: alice<br>x-auth-plan: gold</span></td>
+        </tr>
+        <tr>
+          <td class="lab">Named by</td>
+          <td><span class="m">SecurityPolicy<br>claimToHeaders</span></td>
+          <td><span class="m">&mdash; claims stay<br>inside the proxy</span></td>
+          <td><span class="m">AuthPolicy<br>response.success</span></td>
+        </tr>
+        <tr>
+          <td class="lab">x-gateway-model-name</td>
+          <td colspan="3"><span class="m">not observed at the pod on any stack &mdash; the routing header does its work inside the proxy</span></td>
+        </tr>
+        <tr>
+          <td class="lab">x-selected-model</td>
+          <td colspan="3"><span class="m good">present on chat when the semantic router ran; absent on /v1/embeddings and /v1/rerank on all three</span></td>
+        </tr>
+        <tr>
+          <td class="lab">Response body</td>
+          <td colspan="3"><span class="m">unchanged by every gateway &mdash; the <code>mock_*</code> fields are the fixture reporting what it received</span></td>
+        </tr>
+      </tbody>
+      <caption>The fixture echoes four header names only (<span class="mono">x-auth-user, x-auth-plan, x-user-id, x-gateway-model-name</span>) plus <span class="mono">x-selected-model</span> and <span class="mono">x-vsr-*</span>. Envoy's <span class="mono">x-org-id</span>/<span class="mono">x-team-id</span> and Kuadrant's <span class="mono">x-auth-org</span>/<span class="mono">x-auth-team</span> are outside that allow-list, so their arrival is unobserved rather than disproved.</caption>
+    </table>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Back at the client</th>
+          <th class="c-envoy">Envoy AI Gateway</th>
+          <th class="c-agent">agentgateway</th>
+          <th class="c-kuadrant">Kuadrant</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="lab">No token</td>
+          <td><span class="m">401 · body<br>"Jwt is missing"</span></td>
+          <td><span class="m">401</span></td>
+          <td><span class="m">401 · empty body<br>x-ext-auth-reason</span></td>
+        </tr>
+        <tr>
+          <td class="lab">Wrong org, right team</td>
+          <td><span class="m">403 · body<br>"RBAC: access denied"</span></td>
+          <td><span class="m">403 · body<br>"authorization failed"</span></td>
+          <td><span class="m">403 · empty body<br>x-ext-auth-reason</span></td>
+        </tr>
+        <tr>
+          <td class="lab">Rate limit headers</td>
+          <td><span class="m good">x-ratelimit-limit<br>-remaining · -reset</span></td>
+          <td><span class="m">not observed</span></td>
+          <td><span class="m">not observed</span></td>
+        </tr>
+        <tr>
+          <td class="lab">CORS preflight</td>
+          <td><span class="m good">200 + allow-*</span></td>
+          <td><span class="m good">200</span></td>
+          <td><span class="m bad">405 &mdash; no CORS policy</span></td>
+        </tr>
+        <tr>
+          <td class="lab">Router decision</td>
+          <td colspan="3"><span class="m">x-vsr-selected-decision / -model / -confidence / -reasoning / -matched-keywords / -context-token-count</span></td>
+        </tr>
+        <tr>
+          <td class="lab">Endpoint picker</td>
+          <td colspan="3"><span class="m">x-session-token · x-went-into-resp-headers &mdash; identical on all three, it is KServe's, not the gateway's</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="slot">
+  <h2><span class="sec-no">07</span>The cost of one pre-routing slot</h2>
+  <p class="deck">Fixing the agentgateway column meant working inside a hard limit: this stack has exactly one external-processing slot per phase per target, and two processors wanted it. What follows is what the API permits, what it silently permits, and the one trade-off that has no good answer.</p>
+
+  <h3>There is no ordered chain</h3>
+  <p>The Envoy stack solves this with a list &mdash; <code>extProc: [semantic-router, bbr]</code> &mdash; and each entry sees what the previous one wrote. agentgateway v1.4.1's <code>traffic.extProc</code> is a single object: one <code>backendRef</code>, or a <code>conditional</code> array the CRD documents as <em>the first matching policy will be executed</em>. One processor, either way.</p>
+
+  <p>Two policies do not help. Traffic policies merge field-level with precedence, so a second policy setting <code>extProc</code> replaces the first rather than chaining with it. That failure is quiet:</p>
+
+  <div class="delta" style="border:1px solid var(--rule); border-radius:3px; margin-bottom:20px">
+    <div class="c"><span class="sig"> </span>$ kubectl get agentgatewaypolicy model-body-router -o jsonpath='{…conditions}'</div>
+    <div class="a"><span class="sig">✓</span><span class="k">Accepted=True (Valid)      Attached=True (Attached)</span></div>
+    <div class="c"><span class="sig"> </span>$ kubectl get agentgatewaypolicy kserve-mock-semantic-router -o jsonpath='{…}'</div>
+    <div class="a"><span class="sig">✓</span><span class="k">Accepted=True (Valid)      Attached=True (Attached)</span></div>
+    <div class="x"><span class="sig">✕</span><span class="k">only BBR ran · model:auto reached the pod literally · HTTP 404</span></div>
+  </div>
+
+  <p>Both objects report healthy. Nothing names the processor that was dropped.</p>
+
+  <h3>The shape that works</h3>
+  <p>Give the slot to the router for chat, keep BBR on the JSON task paths, and carry the decision into the route table with a <em>different field</em> &mdash; <code>transformation</code> merges alongside <code>extProc</code> instead of replacing it.</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Measured before building on it</th><th>Result</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="lab">Does <code>transformation</code> run after <code>extProc</code>?</td><td class="good"><span class="m">yes &mdash; a probe transformation read a header BBR had just set</span></td></tr>
+        <tr><td class="lab">Does the router emit <code>x-selected-model</code> for models outside its own catalog?</td><td class="good"><span class="m">yes &mdash; including glm-5.3 and deepseek-v4-pro</span></td></tr>
+        <tr><td class="lab">Is <code>x-selected-model</code> forgeable?</td><td class="good"><span class="m">no &mdash; a client-supplied value is overwritten</span></td></tr>
+        <tr><td class="lab">Can a forged <code>x-gateway-model-name</code> downgrade the authorization check?</td><td class="good"><span class="m">no &mdash; unentitled caller still 403</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Two regressions the happy path would have hidden</h3>
+  <p>Both surfaced only from re-running the full comparison rather than checking that <code>auto</code> worked.</p>
+  <div class="delta" style="border:1px solid var(--rule); border-radius:3px; margin:20px 0">
+    <div class="x"><span class="sig">✕</span><span class="k">bge-m3 → CPU fixture</span>        <span class="c">unconditional transformation wiped BBR's header on task paths</span></div>
+    <div class="a"><span class="sig">→</span><span class="k">conditional, no fallback arm</span>  <span class="c">l40s restored</span></div>
+    <div class="x"><span class="sig">✕</span><span class="k">CORS preflight → 405</span>          <span class="c">OPTIONS now reaches a chat-only processor before the CORS policy</span></div>
+    <div class="a"><span class="sig">→</span><span class="k">request.method == "POST" in the conditions</span>  <span class="c">200 + allow-origin restored</span></div>
+  </div>
+
+  <div class="callout">
+    <span class="tag">The trade-off with no good answer</span>
+    <h3>The router now owns a security-relevant name</h3>
+    <p>Because the router resolves the model that selects the pool <em>and</em> that the B300 authorization rule reads, its availability is now load-bearing. Measured with the router scaled to zero:</p>
+    <div class="delta" style="margin:14px -22px -20px; border-radius:0">
+      <div class="r"><span class="sig">~</span><span class="k">FailOpen</span>    <span class="c">explicit chat 200, auto 404 — but an unentitled caller asking for
+                kimi-k3 was served it (HTTP 200): no filter could name the model</span></div>
+      <div class="a"><span class="sig">✓</span><span class="k">FailClosed</span>  <span class="c">all chat 500, no bypass; embeddings and reranking unaffected</span></div>
+    </div>
+  </div>
+
+  <p>FailOpen would keep the <code>Semantic router unavailable</code> row identical across all three stacks, at the price of dropping an entitlement check during an outage. FailClosed is the one shipped &mdash; BBR already carries it for the same reason, and the router has taken over BBR's job on this path &mdash; so that row now reads <span class="mono">explicit 500 / auto 500</span> here against <span class="mono">explicit 200 / auto 404</span> elsewhere. A comparison row that differs honestly beats one that matches by hiding something.</p>
+
+  <p>A <code>PostRouting</code> BBR pass was tried as a way to have both: run the router before routing for the pool, then BBR before authorization to restore the model name. Authorization does not see that filter's header mutation, so it does not work.</p>
+</section>
+
+<!-- ===================================================== -->
+<section id="gate">
+  <h2><span class="sec-no">08</span>Whose model does the gate judge?</h2>
+  <p class="deck">Once the router resolves <code>auto</code> before authorization runs, the entitlement check stops being about what the client asked for. It is about what the router picked &mdash; and the client cannot see the difference from the request it sent.</p>
+
+  <p>Dave belongs to <code>acme/support</code>. He is a <code>model-users</code> member, not a platform admin, and his team is not the entitled one. He sends the same three-field body every time:</p>
+
+  <div class="delta" style="border:1px solid var(--rule); border-radius:3px; margin-bottom:22px">
+    <div class="c"><span class="sig"> </span>POST /v1/chat/completions</div>
+    <div class="k"><span class="sig"> </span>{"model": "auto", "messages": [{"role": "user", "content": "…"}]}</div>
+  </div>
+
+  <p>Only the prompt text changes. The outcome does too:</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>dave&rsquo;s prompt</th>
+          <th>router picks</th>
+          <th class="c-envoy">Envoy</th>
+          <th class="c-agent">agentgateway</th>
+          <th class="c-kuadrant">Kuadrant</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="lab">&ldquo;prove &hellip; irrational&rdquo;</td>
+          <td><span class="m">kimi-k3 <span class="c">(B300)</span></span></td>
+          <td class="bad"><span class="m">403</span></td>
+          <td class="bad"><span class="m">403</span></td>
+          <td class="bad"><span class="m">403</span></td>
+        </tr>
+        <tr>
+          <td class="lab">&ldquo;refactor this python function&rdquo;</td>
+          <td><span class="m">deepseek-v4-flash</span></td>
+          <td class="good"><span class="m">200</span></td>
+          <td class="good"><span class="m">200</span></td>
+          <td class="good"><span class="m">200</span></td>
+        </tr>
+        <tr>
+          <td class="lab">&ldquo;hello there, good morning&rdquo;</td>
+          <td><span class="m">qwen3.8-27b</span></td>
+          <td><span class="m">not run</span></td>
+          <td class="good"><span class="m">200</span></td>
+          <td class="good"><span class="m">200</span></td>
+        </tr>
+      </tbody>
+      <caption>carol (<span class="mono">acme/research</span>, entitled) and alice (platform admin) return 200 on all three prompts on all three stacks. Kuadrant measured over two warm passes.</caption>
+    </table>
+  </div>
+
+  <p>The mechanism is the same one that makes pool routing work. Authorization reads <code>x-gateway-model-name</code>, and by the time it runs that header holds the resolved model &mdash; BBR derived it from the body the router rewrote on Envoy and Kuadrant, and the pre-routing transformation copied it from <code>x-selected-model</code> on agentgateway. There is no point in any of the three chains where a filter still knows the client said <code>auto</code>.</p>
+
+  <p>That is arguably correct: an entitlement should be a ceiling, not a suggestion, and a caller should not reach a restricted model class by asking indirectly. But consider what it looks like from dave&rsquo;s side. He never named <code>kimi-k3</code>. He asked a question, and got:</p>
+
+  <div class="delta" style="border:1px solid var(--rule); border-radius:3px; margin:0 0 22px">
+    <div class="x"><span class="sig">✕</span><span class="k">403 · "the token identity is not allowed to call this model class"</span></div>
+  </div>
+
+  <p>Which class, and what he could have asked for instead, are not in the answer. Nothing in his request predicts it, and nothing in the response tells him what to retry with.</p>
+
+  <div class="callout">
+    <span class="tag">Open design question</span>
+    <h3>Three ways to resolve it, in ascending cost</h3>
+    <p><strong>Make the denial actionable.</strong> Name the class and an allowed alternative in the message. All three stacks already carry a configurable string here &mdash; Kuadrant's <code>unauthorized.message</code>, and the equivalents on the other two. Cheapest, and it turns a dead end into a retry.</p>
+    <p><strong>Degrade instead of denying.</strong> Give the router an entitlement-aware model set so it never selects a class the caller cannot reach. This is the behaviour most people assume <code>auto</code> already has. It needs the caller's identity at the router, which none of the three stacks currently passes to it.</p>
+    <p><strong>Leave it.</strong> Defensible, and the current state. Worth being a decision rather than a side effect of where the filters sit.</p>
+  </div>
+</section>
+
+<!-- ===================================================== -->
+<section id="found">
+  <h2><span class="sec-no">09</span>What the trace turned up</h2>
+  <p class="deck">Reading the Kuadrant route configuration to write section 04 explained a failure that had been sitting in the comparison results unexplained.</p>
+
+  <p>The saved Kuadrant column carried this, in two consecutive runs:</p>
+
+  <div class="delta" style="border:1px solid var(--rule); border-radius:3px; margin-bottom:20px">
+    <div class="x"><span class="sig">✕</span><span class="k">auto_models: kimi-k3 / deepseek-v4-flash / qwen3.8-27b;</span></div>
+    <div class="x"><span class="sig"> </span><span class="k">   forged-header probe failed (HTTP 404, model None, upstream None)</span></div>
+  </div>
+
+  <p>The probe sends <code>{"model": "auto"}</code> together with a forged <code>x-gateway-model-name: qwen3.8-27b</code> and asserts that the semantic router still runs. Dumping the live route table showed why it did not: the <code>ai.gateway.semantic_router</code> per-route override was present on the <code>chat</code> route and on <em>none</em> of the five model routes, even though the manifest lists all six.</p>
+
+  <p>The object in the cluster had one <code>HTTP_ROUTE</code> patch; the file in the branch has six. The cluster copy predated the change and had never been re-applied. With the override missing, the forged header steered the first match onto <code>model-qwen3-8-27b</code>, where the router was disabled by the virtual-host default; <code>model: auto</code> then reached BBR untouched, no rule matched <code>auto</code>, the fallback route carried the literal string upstream, and the fixture answered 404 for a model it does not serve.</p>
+
+  <p>Re-applying the manifest and re-running the exact probe returned <span class="mono">HTTP 200, model kimi-k3, upstream kimi-k3</span>. The manifests were right the whole time; the retained cluster was stale.</p>
+
+  <div class="callout">
+    <span class="tag">Worth keeping</span>
+    <h3>The probe was doing its job</h3>
+    <p>A stale filter that silently disables semantic routing on five of six chat rules produces no error, no failing status condition, and a perfectly ordinary-looking 404 from the upstream. It was visible only because the comparison asserts the router still runs when a client forges the routing header &mdash; and because that assertion writes its failure into a row someone reads.</p>
+  </div>
+</section>
+
+<footer>
+  <p>Filter chains read from <code>/config_dump</code> on <code>ai-gw-envoy</code> and <code>ai-gw-kuadrant</code>; header deltas echoed by the KServe mock runtime; status codes and bodies from live calls to all three clusters on 2026-08-27. agentgateway's intra-route order is derived from its policy definitions, with four boundaries measured directly, as noted in section 03.</p>
+  <p>The agentgateway change in section 07 is verified across the full install &rarr; teardown &rarr; reinstall cycle, guarded by five negative-tested offline checks in <code>validate-router-config.py</code>, and recorded by re-running the comparison rather than editing its table by hand.</p>
+</footer>
+
+</div>

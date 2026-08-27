@@ -99,6 +99,12 @@ if $DELETE; then
     # that no longer exists would fail open on every request until the filter
     # is withdrawn, which reads like a routing bug rather than a teardown.
     kubectl --context "$ctx" delete -f "$(attachment_for "$ctx")" --ignore-not-found
+    # The agentgateway semantic attachment replaces the always-on BBR policy
+    # of the same name, so the base file has to be restored the same way the
+    # Envoy stack restores its own.
+    if [[ "$ctx" == "$AGENT_CTX" ]]; then
+      kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/agentgateway-extproc.yaml"
+    fi
     # The Envoy semantic attachment replaces the always-on chat BBR policy.
     # Restore the base policy before removing the processor workload.
     if [[ "$ctx" == "$ENVOY_CTX" ]]; then
@@ -134,10 +140,18 @@ for ctx in "$KUADRANT_CTX" "$ENVOY_CTX" "$AGENT_CTX"; do
     kubectl --context "$ctx" -n ai-demo delete \
       envoyextensionpolicy/semantic-router --ignore-not-found
   fi
+  # Migration from the former route-attached agentgateway policy. It ran after
+  # route selection, so `auto` resolved to the right model and was still served
+  # from the CPU fixture. Leaving it behind would add a second ext_proc on the
+  # same route with no ordering guarantee against the PreRouting chain.
+  if [[ "$ctx" == "$AGENT_CTX" ]]; then
+    kubectl --context "$ctx" -n ai-demo delete \
+      agentgatewaypolicy/kserve-mock-semantic-router --ignore-not-found
+  fi
   kubectl --context "$ctx" apply -f "$(attachment_for "$ctx")"
   case "$ctx" in
     "$ENVOY_CTX") wait_condition "$ctx" envoyextensionpolicy/model-body-router-chat Accepted ;;
-    "$AGENT_CTX") wait_condition "$ctx" agentgatewaypolicy/kserve-mock-semantic-router Accepted ;;
+    "$AGENT_CTX") wait_condition "$ctx" agentgatewaypolicy/model-body-router Accepted ;;
     # An EnvoyFilter has no status to wait on. `make compare CLUSTER=<name>` waits for the
     # data plane itself before it measures anything, which is the only check
     # that covers this stack.

@@ -1,43 +1,143 @@
-# agentgateway: attach the semantic router with traffic.extProc.
+# agentgateway: chain semantic model choice before body-based pool routing.
 #
-# agentgateway carries external processing as one field of the same
-# AgentgatewayPolicy that already holds this repository's JWT, authorization,
-# rate limit, and CORS configuration, so the router is attached in the same
-# API and against the same HTTPRoute as every other feature.
+# This intentionally replaces the always-on BBR policy of the same name in
+# llm-d/agentgateway-extproc.yaml, the way the Envoy stack replaces its base
+# chat policy. `make semantic-router-down` restores that base file.
 #
-# The processing options are named per phase rather than as one processing
-# mode; the effect matches the other two stacks. FullDuplexStreamed is the
-# agentgateway default for bodies and would leave the router streaming a body
-# it has to see whole, so the request body is explicitly buffered.
+# Why it is one policy rather than two
+# ------------------------------------
+# agentgateway v1.4.1 has exactly one ext_proc slot per phase per target.
+# `traffic.extProc` is a single object: one `backendRef`, or a `conditional`
+# array the CRD documents as "the first matching policy will be executed".
+# There is no ordered list, which is what the Envoy stack uses to run the
+# semantic router and then BBR over the body it rewrote.
+#
+# Two policies do not work either. Traffic policies merge field-level with
+# precedence, so a second policy setting `extProc` replaces the first instead
+# of chaining. Measured: with BBR and the router as two PreRouting policies,
+# both reported Accepted=True and Attached=True, only BBR ran, and `auto`
+# reached the upstream as a literal model name -- HTTP 404. No status
+# condition reports that the other processor was dropped.
+#
+# So the chat path gets the slot, and the routing header comes from the
+# router instead of from BBR:
+#
+#   PreRouting extProc      chat -> semantic router, tasks -> BBR
+#   PreRouting transformation   x-gateway-model-name := x-selected-model
+#   route selection             the twelve model rules now match
+#
+# Within PreRouting, extProc runs before transformation. Verified on a live
+# cluster with a probe transformation that copied a header BBR had just set.
+#
+# The router is safe to trust for that header. Measured: it emits
+# x-selected-model for every chat model in the catalog, including glm-5.3 and
+# deepseek-v4-pro, which are not in its own `models:` list; and it overwrites
+# a client-supplied x-selected-model rather than honouring it.
+#
+# FailClosed, unlike the other two stacks
+# ---------------------------------------
+# Everywhere else in this repository the router is FailOpen -- "a router that
+# is down must not take the inference path with it". That was the right call
+# while the router was an enrichment attached after routing. Here it is the
+# serving path: it resolves the model name that selects the pool and that the
+# B300 authorization rule reads. BBR carries FailClosed for exactly this
+# reason, and the router has taken over BBR's job on this path.
+#
+# The trade-off was measured both ways, with the router scaled to zero:
+#
+#   FailOpen    explicit chat 200, auto 404 -- but an unentitled caller
+#               asking for kimi-k3 was served it (HTTP 200), because no
+#               filter could name the model for the authorization rule
+#   FailClosed  all chat 500, no bypass; embeddings and reranking unaffected
+#
+# FailOpen keeps a comparison row identical across the three stacks at the
+# cost of dropping an entitlement check during an outage. That is not a
+# trade this repository should make silently, so the flag is closed and the
+# router_fail_open row reports the difference instead.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
-  name: kserve-mock-semantic-router
+  name: model-body-router
   namespace: ai-demo
 spec:
   targetRefs:
     - group: gateway.networking.k8s.io
-      kind: HTTPRoute
-      name: kserve-mock
+      kind: Gateway
+      name: ai-gateway
   traffic:
+    # PreRouting is what makes the resulting header available to ordinary
+    # Gateway API matching. A route-attached policy runs after the route is
+    # already chosen, which is why the previous arrangement resolved `auto`
+    # correctly and still served it from the CPU fixture.
+    phase: PreRouting
     extProc:
-      # The vLLM semantic router only implements OpenAI chat processing.
-      # Conditional ext_proc keeps embeddings, reranking, models, and audio on
-      # the same KServe route without sending them to the chat processor.
       conditional:
-        - condition: 'request.path == "/v1/chat/completions"'
+        # The vLLM semantic router only implements OpenAI chat processing, and
+        # this arm now runs before the CORS policy rather than after it, so the
+        # method is part of the condition: an OPTIONS preflight that reaches a
+        # chat-only processor is answered 405 and never becomes a CORS reply.
+        - condition: 'request.method == "POST" && request.path == "/v1/chat/completions"'
           policy:
             backendRef:
               name: semantic-router
               namespace: ai-demo
               port: 50051
-            # A router that is down must not take the inference path with it.
-            failureMode: FailOpen
+            failureMode: FailClosed
             processingOptions:
               allowModeOverride: true
               requestHeaderMode: Send
+              # The decision is made from the chat body, and FullDuplexStreamed
+              # is the agentgateway default, so buffering is explicit.
               requestBodyMode: Buffered
               responseHeaderMode: Send
               responseBodyMode: None
               requestTrailerMode: Skip
               responseTrailerMode: Skip
+        # Embeddings and reranking keep the official body-based router: the
+        # semantic router would answer them with a chat-only 404.
+        - condition: >-
+            request.method == "POST" &&
+            (request.path == "/v1/embeddings" ||
+             request.path == "/v1/rerank")
+          policy:
+            backendRef:
+              group: agentgateway.dev
+              kind: AgentgatewayBackend
+              name: body-based-router
+              namespace: ai-demo
+            failureMode: FailClosed
+            processingOptions:
+              requestHeaderMode: Send
+              requestBodyMode: Buffered
+              responseHeaderMode: Skip
+              responseBodyMode: None
+              requestTrailerMode: Skip
+              responseTrailerMode: Skip
+    # `transformation` is a different field from `extProc`, so this merges
+    # with the block above instead of replacing it.
+    transformation:
+      conditional:
+        # Chat, router reached: the selected model becomes the routing header,
+        # overwriting anything the client sent. This is also what keeps a
+        # forged header from downgrading the authorization check -- measured,
+        # an unentitled caller forging `x-gateway-model-name: mock-kserve`
+        # while asking for kimi-k3 still gets 403.
+        - condition: '"x-selected-model" in request.headers'
+          policy:
+            request:
+              set:
+                - name: x-gateway-model-name
+                  value: request.headers["x-selected-model"]
+        # Chat, no selection: clear the header so a forged value cannot
+        # survive. Unreachable while the arm above is FailClosed; it is kept
+        # so switching that flag to FailOpen does not silently open a
+        # header-forgery path as well as an entitlement gap.
+        - condition: 'request.method == "POST" && request.path == "/v1/chat/completions"'
+          policy:
+            request:
+              set:
+                - name: x-gateway-model-name
+                  value: '""'
+        # No fallback arm: embeddings and reranking must keep the header BBR
+        # just wrote. An unconditional rule here wipes it -- measured, bge-m3
+        # fell back from the l40s pool to the shared CPU fixture.
