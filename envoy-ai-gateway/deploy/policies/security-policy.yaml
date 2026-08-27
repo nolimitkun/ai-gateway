@@ -38,6 +38,16 @@ spec:
             header: x-user-id
           - claim: plan
             header: x-auth-plan
+          # Org and team are emitted as scalar claims rather than read out of
+          # the group path, because Envoy Gateway matches claims by exact
+          # value only -- no prefix, no regex -- and the Keycloak group
+          # membership claim carries the leaf path (`/acme/research`), not its
+          # ancestors. These two headers are also what keys the nested rate
+          # limit buckets in rate-limit.yaml.
+          - claim: org
+            header: x-org-id
+          - claim: team
+            header: x-team-id
   authorization:
     defaultAction: Deny
     rules:
@@ -51,6 +61,35 @@ spec:
                 valueType: StringArray
                 values:
                   - platform-admins
+      # Team entitlement. Rules are evaluated in order and the first match
+      # wins, so this has to sit above the big-tier Deny to have any effect --
+      # appending it below would make it unreachable. Both claims must match
+      # (claims within one rule are AND-ed), and so must the header principal
+      # (principal types are AND-ed too), so this allows exactly "an entitled
+      # team asking for a big-tier model".
+      #
+      # A token with no `org` claim never matches, so it falls through to the
+      # flat rules below: the original users keep their existing behaviour.
+      - name: acme-research-is-entitled-to-big-tier
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: org
+                valueType: String
+                values:
+                  - acme
+              - name: team
+                valueType: String
+                values:
+                  - research
+          headers:
+            - name: x-gateway-model-name
+              values:
+                - kimi-k3
+                - glm-5.3
+                - deepseek-v4-pro
       - name: big-tier-models-are-admin-only
         action: Deny
         principal:

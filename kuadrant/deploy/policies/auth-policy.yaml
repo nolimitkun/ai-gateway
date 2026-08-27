@@ -30,36 +30,89 @@ spec:
             - selector: auth.identity.groups
               operator: incl
               value: model-users
-      kimi-k3-is-admin-only:
+      # Admins, or a team entitled to the class. Authorization rules here are
+      # cumulative, so the entitlement cannot be added as a fourth rule --
+      # that rule would simply fail for everybody else. It has to widen the
+      # rule that already denies, which Authorino supports through `any`
+      # (a logical OR over pattern expressions).
+      #
+      # agentgateway has the same cumulative constraint and the same fix.
+      # Envoy Gateway has the mirror-image one: rules are first-match-wins
+      # there, so widening is a prepend and it is the restriction that risks
+      # becoming unreachable.
+      #
+      # The entitled arm reads the scalar `org` and `team` claims rather than
+      # the group path, matching how the other rules here are written.
+      # Authorino also accepts a CEL `predicate`, which could test the path
+      # claim as a subtree the way agentgateway does; the selector form is
+      # used because it is the mechanism the rest of this policy already
+      # proves out.
+      #
+      # Both claims, not just `team`. A team name is only unique within its
+      # org, so matching `team == research` alone entitles a `research` team
+      # in *any* org -- a tenant boundary crossed by a name collision rather
+      # than by a grant. Envoy binds the pair as two claim matches and
+      # agentgateway binds it as the `/acme/research` path; this is the same
+      # intent in Authorino's shape. `all` nested inside `any` is what keeps
+      # the admin arm a genuine OR: admins carry no `org` claim, so hoisting
+      # the org test up to `patterns` -- which ANDs -- would lock them out.
+      # The realm carries a `/globex/research` team and the user frank for
+      # exactly this case; before the org was bound, frank reached the B300
+      # class here while the other two stacks denied him.
+      kimi-k3-needs-admin-or-entitled-team:
         when:
           - selector: request.headers.x-gateway-model-name
             operator: eq
             value: kimi-k3
         patternMatching:
           patterns:
-            - selector: auth.identity.groups
-              operator: incl
-              value: platform-admins
-      glm-5-3-is-admin-only:
+            - any:
+                - selector: auth.identity.groups
+                  operator: incl
+                  value: platform-admins
+                - all:
+                    - selector: auth.identity.org
+                      operator: eq
+                      value: acme
+                    - selector: auth.identity.team
+                      operator: eq
+                      value: research
+      glm-5-3-needs-admin-or-entitled-team:
         when:
           - selector: request.headers.x-gateway-model-name
             operator: eq
             value: glm-5.3
         patternMatching:
           patterns:
-            - selector: auth.identity.groups
-              operator: incl
-              value: platform-admins
-      deepseek-v4-pro-is-admin-only:
+            - any:
+                - selector: auth.identity.groups
+                  operator: incl
+                  value: platform-admins
+                - all:
+                    - selector: auth.identity.org
+                      operator: eq
+                      value: acme
+                    - selector: auth.identity.team
+                      operator: eq
+                      value: research
+      deepseek-v4-pro-needs-admin-or-entitled-team:
         when:
           - selector: request.headers.x-gateway-model-name
             operator: eq
             value: deepseek-v4-pro
         patternMatching:
           patterns:
-            - selector: auth.identity.groups
-              operator: incl
-              value: platform-admins
+            - any:
+                - selector: auth.identity.groups
+                  operator: incl
+                  value: platform-admins
+                - all:
+                    - selector: auth.identity.org
+                      operator: eq
+                      value: acme
+                    - selector: auth.identity.team
+                      operator: eq
+                      value: research
     response:
       success:
         headers:
@@ -69,6 +122,17 @@ spec:
           x-auth-plan:
             plain:
               selector: auth.identity.plan
+          # Injected so the rate limit policies have something identity-shaped
+          # to key nested counters on. Whether the rate limit action actually
+          # sees headers this filter injected is the open question in this
+          # topology -- see rate-limit-policy.yaml, and the comparison row
+          # that measures it rather than assuming either answer.
+          x-auth-org:
+            plain:
+              selector: auth.identity.org
+          x-auth-team:
+            plain:
+              selector: auth.identity.team
       unauthenticated:
         code: 401
         message:

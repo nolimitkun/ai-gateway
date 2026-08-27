@@ -51,6 +51,8 @@ below separates live behavior from schema-only and path-limited capabilities.
 | Token budgets | `TokenRateLimitPolicy` reads response `usage.total_tokens` | `llmRequestCosts` through the AI Gateway ext-proc | `unit: Tokens` requires an agentgateway AI backend with tokenization; unavailable on this generic KServe `InferencePool` |
 | Counter storage | Limitador installed by the operator | External Redis and rate-limit service for global limits | In-process for local limits |
 | Per-identity buckets | CEL counters are supported; this pinned Istio fixture uses shared probe buckets because Authorino identity metadata is not exposed to the 1.5.2 Wasm rate-limit action | Header descriptors | CEL descriptors in global mode; local mode is shared per proxy |
+| Nested limit buckets (org/team/user) | One named limit per level, each with its own CEL `counters` — but nothing the caller cannot forge actually keys them here | One global rule per level; `shared: true` would span routes but silently disables the token budget, so buckets stay per-route | `local` takes no key and `conditional` is first-match-wins, so only `rateLimit.global` nests — needs an external rate-limit service |
+| Group hierarchy in rules | Exact `incl`, or a CEL `predicate` over the path claim | Exact claim values only; no prefix or regex, so nesting needs a flattened claim | CEL `startsWith` over the group path claim |
 | CORS | No Kuadrant CORS policy; not enabled in this Istio fixture | `SecurityPolicy` `cors` | `traffic.cors` |
 | LLM request shaping | Not provided by the compared policy | `AIGatewayRoute` body/header mutation | Model aliases, prompt prepend/append, and caching |
 | Prompt guardrails | Not provided by the compared policy | Not provided by the compared policy | `backend.ai.promptGuard` |
@@ -71,7 +73,7 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-26 07:33 (30 requests) | 2026-08-26 07:36 (30 requests) | 2026-08-26 07:10 (30 requests) |
+| Last isolated comparison (UTC) | 2026-08-26 16:52 (30 requests) | 2026-08-26 16:57 (30 requests) | 2026-08-27 06:10 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
@@ -86,31 +88,36 @@ zero-delay Python runtime, not production performance benchmarks.
 | Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
 | Tiered chat models | big/medium/small | big/medium/small | big/medium/small |
 | Embeddings API | Yes | Yes | Yes |
-| RAG embedding models | Yes | Yes | Yes |
+| RAG embedding models | No | Yes | Yes |
 | Embedding dimension validation | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected |
 | Reranking API | Yes | Yes | Yes |
 | Speech-to-text API | Yes | Yes | Yes |
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
 | Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
 | Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
-| Local chat p50 | 50 ms | 38 ms | 59 ms |
+| Local chat p50 | 74 ms | 44 ms | 58 ms |
 | Policy objects reporting ready | 3/3 | 3/3 | 5/5 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
 | Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
-| Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
+| Auto model selection: reasoning / code / chat | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; forged-header probe failed (HTTP 404, model None, upstream None) | kimi-k3 / deepseek-v4-flash / qwen3.8-27b | kimi-k3 / deepseek-v4-flash / qwen3.8-27b |
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
 | Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | all / all / all |
 | Decision headers returned to the client | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk | deep-reasoning / code / small-talk |
-| Auto-routed chat p50 | 48 ms | 27 ms | 61 ms |
+| Auto-routed chat p50 | 203 ms | 28 ms | 53 ms |
 | Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
 | Authentication across models/chat/embed/rerank/STT | 5/5 denied / 5/5 allowed | 5/5 denied / 5/5 allowed | 5/5 denied / 5/5 allowed |
 | Verified identity headers at model pod | x-auth-plan=gold, x-auth-user=alice | x-auth-plan=gold, x-user-id=alice | Not configured |
 | Authorization: guest / non-admin B300 / admin B300 | 403 / 403 / 200 | 403 / 403 / 200 | 403 / 403 / 200 |
+| Team entitlement to the B300 class | unentitled 403 / entitled 200 | unentitled 403 / entitled 200 | unentitled 403 / entitled 200 |
+| Same team name, different org | Denied (HTTP 403) | Denied (HTTP 403) | Denied (HTTP 403) |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
 | Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
-| Quota limit (3 per window) | 429 on request 1 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 1 of 6; shared bucket |
+| Quota limit (3 per window) | 429 on request 1 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
+| Nested org/team buckets (org 5, team 3) | unenforced: team A no 429 in 4; team B no 429 in 4; other org no 429 in 3 | nested: team A 429 on request 4 of 4; team B 429 on request 2 of 4; other org no 429 in 3 | Needs an external rate limit service |
+| Forged tenant header | HONOURED -- bucket escaped (HTTP 200) | Ignored (HTTP 429) | Not applicable without tenant buckets |
+| Tenant bucket across both routes | Single inference route | SEPARATE bucket per route -- ceiling doubled | Single inference route |
 | Token limit (100 tokens per minute) | 429 on request 3 of 6 | 429 on request 3 of 6 | Not available on KServe InferencePool |
 | CORS preflight answered | No (HTTP 405) | Yes (HTTP 200) | Yes (HTTP 200) |
 | Unapproved CORS origin | No allow-origin (HTTP 405) | No allow-origin (HTTP 200) | No allow-origin (HTTP 200) |
@@ -661,9 +668,12 @@ The stack-specific edges are intentional and recorded in the live table:
   shared per proxy.
 
 Probe headers isolate rate-limit tests from ordinary traffic:
-`x-rate-limit-probe`, `x-quota-probe`, and `x-token-limit-probe`. Envoy uses the
-quota probe value as a fresh key. Kuadrant and agentgateway use shared buckets,
-which the comparison output labels explicitly.
+`x-rate-limit-probe`, `x-quota-probe`, `x-token-limit-probe`, and
+`x-tenant-probe`. Envoy uses the quota probe value as a fresh key. Kuadrant and
+agentgateway use shared buckets for the first three, which the comparison
+output labels explicitly. The tenant probe carries one value per run shared by
+every probe user, so the org bucket they are meant to contend for is the same
+bucket.
 
 ### Test identities
 
@@ -675,6 +685,10 @@ gateway endpoint as inference traffic.
 | `alice` | `alice` | `platform-admins`, `model-users` | Gold | Every model class |
 | `bob` | `bob` | `model-users` | Free | Everything except B300 |
 | `mallory` | `mallory` | `guests` | Free | HTTP 403 on `/v1` |
+| `carol` | `carol` | `model-users`, `/acme/research` | Gold | B300 by team entitlement |
+| `dave` | `dave` | `model-users`, `/acme/support` | Gold | Everything except B300 |
+| `erin` | `erin` | `model-users`, `/globex/platform` | Free | Everything except B300 |
+| `frank` | `frank` | `model-users`, `/globex/research` | Free | Everything except B300 — same team name as `carol`, different org |
 
 ```bash
 BASE=http://localhost:8082
@@ -688,6 +702,112 @@ curl "$BASE/v1/chat/completions" \
   -H 'content-type: application/json' \
   -d '{"model":"mock-kserve","messages":[{"role":"user","content":"hello"}]}'
 ```
+
+### Multi-level tenancy: org, team, user
+
+The first three identities above are flat. `carol`, `dave` and `erin` add a
+second axis: nested Keycloak groups (`/acme/research`, `/acme/support`,
+`/globex/platform`) where entitlements and budgets exist at the org level, the
+team level and the user level at once.
+
+**Identity.** The realm emits the hierarchy twice, and it has to. Keycloak's
+group membership claim carries the paths a user is *directly* in — a member of
+`/acme/research` gets `["/acme/research"]`, not its ancestors — so asking "is
+this caller anywhere under `/acme`" is a prefix test. agentgateway does that
+natively, since its rules are CEL, and Kuadrant can through an Authorino CEL
+`predicate`. Envoy Gateway cannot: it matches claims by exact value only, no
+prefix and no regex. So a second pair of scalar claims, `org` and `team`,
+carries the same fact in a flattened form. Those claims are also what keys the
+limit buckets in every stack, since a rate-limit descriptor cannot key on an
+array.
+
+The existing `groups` claim is left alone. Switching it to full paths would
+rewrite `model-users` to `/model-users` and break the authorization rules in
+all three stacks at once, so the path claim is added under a new name.
+
+**Authorization** stacks as: valid token → org → team entitlement → user role.
+The interesting part is that "add an org rule" means something different in
+each engine, and both shapes have a trap:
+
+| Stack | Rules combine by | Consequence |
+|---|---|---|
+| Kuadrant, agentgateway | Cumulative — every rule must pass | A new rule can only *subtract* access. Widening to an entitled team means editing the rule that already denies |
+| Envoy Gateway | First match wins | A new rule can only be reached if it is *prepended*. Appended below an existing `Allow`, an entitlement is dead code |
+
+An entitlement also has to name the org, not just the team. Team names are
+only unique inside their org, so `team == research` grants the B300 class to a
+`research` team in *every* org — a tenant boundary crossed by a name collision
+rather than by a grant. Each stack spells the binding differently: Envoy
+matches the `org` and `team` claims as a pair, agentgateway matches the
+`/acme/research` group path, and Kuadrant nests an `all` inside the `any` so
+that the admin arm stays a real OR (admins carry no `org` claim, and hoisting
+the org test up to `patterns`, which ANDs, would lock them out).
+
+`frank` exists to keep that honest: he is `/globex/research`, the same team
+name as `carol` in a different org. The `Same team name, different org` row
+sends his token at the B300 class, and Kuadrant granted it until the org was
+bound. `make validate` now rejects an entitlement that names the team without
+the org in any of the three policies.
+
+**Limits** nest by intersection: org, team and user counters are all charged
+for the same request, and whichever empties first returns the 429. Team caps
+are over-subscribed against the org cap on purpose — the parent is the real
+ceiling, and the child only stops one team eating it alone.
+
+Each stack reaches this differently, and one cannot:
+
+- **Envoy AI Gateway** — one global rate-limit rule per level, keyed
+  `type: Distinct`. Nesting works, and it comes with a trade-off that only a
+  live run surfaces. `shared: true` is the setting that makes a tenant bucket
+  span both inference routes; without it the policy targets the Gateway, each
+  route keeps its own counters, and an org gets one full budget per route.
+  But setting it on *any* rule in the policy makes Envoy Gateway emit a second
+  rate-limit filter with its own domain, and the limit service registers every
+  limit under one domain only. Request-phase limits survive that — the
+  decision is the OR of the two filters. The token budget does not: it is
+  charged with `apply_on_stream_done`, that call lands on the empty domain,
+  and the budget silently stops being enforced (measured: 8 × 57 tokens
+  against a 100/minute cap, no 429, while the request-count rules kept
+  working). The policy therefore leaves the flag off and takes the doubled
+  ceiling, which is the failure the comparison can see: the tenant-bucket row
+  reports `SEPARATE bucket per route — ceiling doubled`.
+- **Kuadrant** — one named limit per level with its own CEL `counters`, and
+  here it does not work. Three keyings were measured: `auth.identity.org`
+  is unenforced, confirming that Authorino's identity metadata is not exposed
+  to the rate-limit action in the pinned Wasm topology; the headers the
+  `AuthPolicy` injects are *also* unenforced, because they are added toward
+  the upstream and are not in `request.headers` when the action evaluates, so
+  the descriptor is absent and the limit is skipped; and a client-supplied
+  `x-org-id` does bind, which makes it forgeable rather than a tenancy
+  control. The nesting row reads `unenforced` and the limits stay unpromoted.
+
+  Quoting matters more than it looks here. Kuadrant interpolates a counter
+  expression into a CEL string for Limitador's `variables`, so
+  `request.headers["x"]` becomes `descriptors[0]["request.headers["x"]"]`,
+  whose inner quotes end the string early. Limitador rejects the *entire*
+  limit file over it and crash-loops on a cold start, taking every rate limit
+  in the policy with it — while the `RateLimitPolicy` still reports
+  `Enforced: True`. Use single quotes; `make validate` rejects a double one.
+- **agentgateway** — not expressible with what is deployed. A `local` bucket
+  takes no key at all, and while the `conditional` wrapper does take CEL, only
+  "the first matching policy will be executed" — first-match-wins cannot charge
+  an org bucket and a team bucket for one request. `rateLimit.global` nests
+  cleanly and handles token cost natively, but requires an external rate-limit
+  service this repository deploys for Envoy Gateway only. A deployment gap
+  rather than a capability gap.
+
+**Spoofing.** Once a bucket is keyed on `x-org-id`, a caller who can set that
+header picks their own budget. The comparison forges one against an exhausted
+org bucket: if the value is honoured the request escapes into another tenant's
+allowance, and the row says so.
+
+`scripts/validate-tenant-model.py` (part of `make validate`) holds the pieces
+together offline — the probe users exist and are password-grantable, two share
+an org and one does not, the caps in both stacks agree with the caps the
+harness classifies against, the caps are spaced so the three outcomes stay
+distinguishable, `shared: true` stays off the Envoy tenant rules for as long as
+that policy also charges a response cost, and no Kuadrant counter expression
+carries the double quote that crash-loops Limitador.
 
 ## Semantic routing layer
 
@@ -851,6 +971,20 @@ resolves to exactly one keyword rule at a distinct priority, and the three
 prompts the per-gateway comparison sends select three different models—read
 from `compare/run-gateway.py` itself, so a changed prompt or keyword fails the
 check rather than quietly reporting the default as a routing decision.
+
+The org/team tenancy contract is checked the same way and for the same reason.
+Its comparison row is a classifier rather than a threshold — it decides between
+"nested", "shared" and "unenforced" by *which* request number returns 429 — so
+a cap edited in one policy file and not the other does not fail loudly; the
+gateway still behaves correctly and the row just relabels it "unexpected".
+`make validate` therefore checks that the probe users exist and are
+password-grantable, that two of them share an org and one does not, that both
+stacks' caps agree with the caps the harness classifies against, that those
+caps stay far enough apart for the three outcomes to be distinguishable, that
+`shared: true` stays off the Envoy tenant rules while that policy also charges
+a response cost — the flag silently disables the token budget — and that no
+Kuadrant counter expression carries a double quote, which would make Limitador
+reject its whole limit file and crash-loop.
 
 `make compare CLUSTER=<name>` adds live-cluster assertions to that gateway's
 saved result:
