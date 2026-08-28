@@ -1,0 +1,154 @@
+# Body-based model routing with no body-based router.
+#
+# Every stack in this repository runs the Gateway API Inference Extension BBR
+# to copy `body.model` into X-Gateway-Model-Name, because Gateway API matches
+# paths and headers and the model name is in the JSON body. Envoy AI Gateway
+# does not need it: the AIGatewayRoute CRD states that `x-ai-eg-model` "is
+# available if we want to describe the routing behavior based on the model
+# name. The model name is extracted from the request content before the
+# routing decision." This route is the same twelve model-to-pool mappings as
+# the BBR path in kserve/pools/route.yaml, expressed against that header.
+#
+# Pinned to the `native.local` hostname rather than replacing the BBR route.
+# An exact hostname wins over a route with none, so both mechanisms serve the
+# same cluster at once and one request can be sent down either. That makes the
+# overlay non-destructive -- and it is what lets the comparison scale BBR to
+# zero and show this path still resolving pools, which is the actual claim.
+#
+# Two constraints of the API, both load-bearing:
+#
+#   - AIGatewayRoute matches carry `headers` only; the schema has no path
+#     matcher. Model names are unique per endpoint here, so chat, embedding
+#     and rerank models all resolve -- but /v1/models (no body) and the
+#     multipart speech endpoint cannot be routed by model at all and are left
+#     to the fallback rule below.
+#   - `rules` is capped at maxItems: 15. Twelve models plus one fallback fits
+#     with two to spare; a thirteenth accelerator model would not.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: kserve-mock-native
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+  hostnames:
+    - native.local
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: kimi-k3
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-b300-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: glm-5.3
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-b300-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: deepseek-v4-pro
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-b300-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: deepseek-v4-flash
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-h200-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: qwen3.8-27b
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-h100-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: qwen3-embedding-8b
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-h100-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: e5-mistral-7b-instruct
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-h100-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: bge-m3
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-l40s-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: jina-embeddings-v3
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-l40s-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: nomic-embed-text-v2-moe
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-l40s-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: bge-reranker-v2-m3
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-l40s-inference-pool}
+      timeouts: {request: 60s}
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: jina-reranker-v2-base-multilingual
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-l40s-inference-pool}
+      timeouts: {request: 60s}
+    # Fallback, and the same shape the token-accounting route already uses:
+    # any model the twelve rules above did not name reaches the shared CPU
+    # fixture, as it does on the BBR path.
+    - matches:
+        - headers:
+            - type: RegularExpression
+              name: x-ai-eg-model
+              value: ".*"
+      backendRefs:
+        - {group: inference.networking.k8s.io, kind: InferencePool, name: kserve-mock-inference-pool}
+      timeouts: {request: 60s}
+# Deliberately no llmRequestCosts, unlike the token-accounting route this file
+# is otherwise shaped like. Declaring them publishes the token counts the
+# BackendTrafficPolicy charges, and that policy targets the Gateway while its
+# counters stay per-route -- so this hostname would get its own 100-tokens-a-
+# minute budget. The routing probes send about a dozen chat requests at roughly
+# 57 tokens each, so the second one would 429 and every native row would report
+# a rate limit rather than where the request was routed. Token accounting is
+# measured on the ai.local route; this one measures routing.

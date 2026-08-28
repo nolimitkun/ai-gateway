@@ -15,7 +15,18 @@ one place; `make validate` keeps those copies synchronized.
 | 6 | Keycloak workload and route | `keycloak/` | `make policies` |
 | 7 | Redis, AI route, security, request, quota, and token policies | `policies/` | `make policies` |
 | 8 | Optional semantic-router workload, config, and ordered ext_proc chain | `semantic-router/` | `make semantic-router` |
-| 9 | Optional real vLLM model services | `kserve/production/` | production deployment workflow |
+| 9 | Optional native body-model routing on `native.local`, beside the BBR path | `native-routing/` | `make native-routing` |
+| 10 | Optional real vLLM model services | `kserve/production/` | production deployment workflow |
 
 The base and pool manifests are byte-equivalent to the former shared KServe
 resources; only their repository paths changed.
+
+`native-routing/` is additive and never replaces `llm-d/`. It expresses the
+same twelve model-to-pool mappings against `x-ai-eg-model`, the header this
+gateway's own processor derives from the request body, so the comparison can
+scale BBR to zero and show which path depended on it. Measured, it serves
+eight of the twelve: both h100 embedding models answer 500 and both rerankers
+404, where the BBR route serves all twelve. `AIGatewayRoute.rules` also has no
+`name` field, so the generated route carries no section names and the
+chat-only semantic router cannot be scoped to chat -- which is why BBR is not
+replaceable here. See `docs/open-questions.md`.

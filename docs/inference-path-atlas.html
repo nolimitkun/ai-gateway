@@ -516,6 +516,7 @@ footer {
     <a href="#slot"><span>07</span> The cost of one pre-routing slot</a>
     <a href="#gate"><span>08</span> Whose model does the gate judge?</a>
     <a href="#found"><span>09</span> What the trace turned up</a>
+    <a href="#native"><span>10</span> The path without a body-based router</a>
   </nav>
 </header>
 
@@ -1369,9 +1370,58 @@ footer {
   </div>
 </section>
 
+<section id="native">
+  <h2><span class="sec-no">10</span>The path without a body-based router</h2>
+  <p class="deck">Every hop in sections 02 through 04 depends on one external process copying <code>body.model</code> into a header. Two of the three gateways have an API that does it themselves. Whether that makes the process removable is a different question from whether it works, and the two answers came out opposite.</p>
+
+  <p>The Gateway API Inference Extension body-based router exists because Gateway API matches paths and headers, and the model name is in the JSON body. Reading the vendored CRDs rather than the deployment, only one of the three stacks needs it. <code>AIGatewayRoute</code> states the model &ldquo;is extracted from the request content before the routing decision&rdquo;. <code>AgentgatewayModel</code> matches <code>model</code> &ldquo;against client requests&rdquo;. Istio has neither, which is why the Kuadrant profile drives BBR from a raw <code>EnvoyFilter</code> carrying one patch per model rule.</p>
+
+  <p>Those two native paths are installed on a <code>native.local</code> hostname beside the BBR path rather than in place of it, so one cluster answers the same request either way and the rows below are a comparison rather than a before-and-after across two runs. Each was measured with the body-based router scaled to zero, so a pool reached cannot have been reached through it.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>With BBR scaled to zero</th>
+        <th class="c-envoy">Envoy AI Gateway</th>
+        <th class="c-agent">agentgateway</th>
+        <th class="c-kuadrant">Kuadrant</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Models routed to their pool</td><td><span class="x">8 of 12</span></td><td><span class="good">12 of 12</span></td><td>no body-aware API</td></tr>
+      <tr><td>Forged model header</td><td>body wins, header ignored</td><td>no client-visible header exists</td><td>&mdash;</td></tr>
+      <tr><td>Tier ceiling, both rungs</td><td><span class="good">held</span></td><td><span class="good">held</span></td><td>&mdash;</td></tr>
+      <tr><td>Catalog / <code>auto</code> / speech</td><td>200 / <span class="x">404</span> / 200</td><td>200 / 200 / 200</td><td>&mdash;</td></tr>
+    </tbody>
+  </table>
+
+  <p>The tier ceiling was the open one. On the native path the rule cannot gate on the header BBR writes, because nothing writes it there; it gates on <code>x-ai-eg-model</code>, which the AI processor derives, and whether ext_authz observes a header its own processor writes is a filter-order question no schema answers. It does: a medium-tier token was refused <code>kimi-k3</code> and served <code>deepseek-v4-flash</code> with no body-based router in the path.</p>
+
+  <h3>Why neither stack can drop it anyway</h3>
+
+  <p>BBR is not really a router. It is an external process that writes a header into an ordinary <code>HTTPRoute</code>&rsquo;s match space, and everything downstream composes with it because everything downstream speaks plain Gateway API: route rules match the header and those rules have <em>names</em>, an <code>EnvoyExtensionPolicy</code> targets a <code>sectionName</code>, the <code>SecurityPolicy</code> matches the same header, and rate-limit descriptors key on the rule name. The native APIs are closed routing objects. They own the decision and expose nothing to attach to. They replace BBR&rsquo;s extraction; they do not replace its composability, and the composability is where the rest of the logic lives.</p>
+
+  <div class="delta" style="border:1px solid var(--rule); border-radius:3px; margin-bottom:20px">
+    <div class="x"><span class="sig">✕</span><span class="k">Envoy: AIGatewayRoute.rules has no `name` field in v1alpha1 or v1beta1</span></div>
+    <div class="c"><span class="sig"> </span>so the generated route has no section names, and the chat-only semantic</div>
+    <div class="c"><span class="sig"> </span>router cannot be scoped to chat. Attached to the whole route it answers</div>
+    <div class="c"><span class="sig"> </span>embeddings and rerank with its own 404; omitted, `auto` disappears.</div>
+    <div class="x"><span class="sig">✕</span><span class="k">agentgateway: models 404 on the default listener, however attached</span></div>
+    <div class="c"><span class="sig"> </span>and `traffic.transformation` cannot read the body to write the header</div>
+    <div class="c"><span class="sig"> </span>itself: `request.body.model` is accepted, reports Attached, and is inert.</div>
+  </div>
+
+  <p>Removing it naively on Envoy is worse than not working. With BBR&rsquo;s <code>ext_proc</code> attachments deleted, every request still returned HTTP 200 &mdash; from the shared CPU fixture &mdash; and a medium-tier token was served <code>kimi-k3</code>. The <code>SecurityPolicy</code> gates on the same header the route matches, so routing and authorization failed open together and silently. That is the reason the overlay is additive: not caution, but the measured cost of the alternative.</p>
+
+  <p>agentgateway comes closest. On its own listener the native path is a complete functional replacement &mdash; twelve of twelve models, <code>auto</code>, the catalog, speech, the tier ceiling on the model resource rather than on a forgeable header, and rate limiting all follow a caller who switches hostname. What is not replaceable there is making it the <em>default</em> path, which is a listener-binding limitation rather than a missing capability.</p>
+
+  <p>One method note, since it nearly went the other way. The row above read <span class="mono">4/4 pools</span> for months. It sampled one model per accelerator class, and the four it happened to pick were the four that worked; a third of the catalog did not route natively on Envoy at all. The probe now sends all twelve and reports models rather than pools.</p>
+</section>
+
 <footer>
   <p>Filter chains read from <code>/config_dump</code> on <code>ai-gw-envoy</code> and <code>ai-gw-kuadrant</code>; header deltas echoed by the KServe mock runtime; status codes and bodies from live calls to all three clusters on 2026-08-27. agentgateway's intra-route order is derived from its policy definitions, with four boundaries measured directly, as noted in section 03.</p>
   <p>The agentgateway change in section 07 is verified across the full install &rarr; teardown &rarr; reinstall cycle, guarded by five negative-tested offline checks in <code>validate-router-config.py</code>, and recorded by re-running the comparison rather than editing its table by hand.</p>
+  <p>Section 10 was measured on 2026-08-28 on <code>ai-gw-envoy</code> and <code>ai-gw-agent</code>, one cluster at a time, with the body-based router scaled to zero and both clusters restored and re-verified afterwards. Its eight offline guards are in <code>validate-native-routing.py</code>, each negative-tested by reintroducing the defect it catches.</p>
 </footer>
 
 </div>

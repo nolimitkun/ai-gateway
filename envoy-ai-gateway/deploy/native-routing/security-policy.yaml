@@ -1,0 +1,114 @@
+# Authentication and authorization for the native routing hostname.
+#
+# This file is not optional. A SecurityPolicy targets routes, and the existing
+# one names kserve-mock and kserve-mock-ai; without this second policy the
+# native.local hostname would reach the InferencePool with no token at all --
+# the same trap policies/security-policy.yaml already documents for the
+# AIGatewayRoute it added.
+#
+# The tier rules are the interesting part. The contract is the same scalar
+# `tier` claim the BBR path uses, and the same ceiling big >= medium >= small,
+# but the header it is tested against differs. On the BBR path the rules gate
+# on X-Gateway-Model-Name, which the body-based router writes. There is no BBR
+# here, so they gate on `x-ai-eg-model`, which the AI Gateway processor derives
+# from the body. Whether ext_authz actually observes that header is a question
+# of filter order, and it is not settled by any schema: if the AI processor
+# runs after authorization, these rules see nothing, every request falls
+# through to the small-tier Allow, and the ceiling stops binding. That is why
+# the comparison sends a medium-tier and a big-tier token at a big-tier model
+# through this hostname rather than assuming the rules bind. A row that reads
+# GRANTED is the finding, not a bug to paper over.
+#
+# Rule order matters for the same reason it does on the BBR path: Envoy
+# Gateway evaluates rules in order and the first match wins, so each tier's
+# Allow must precede the Deny that closes that tier to everyone below it.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: kserve-mock-native
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: kserve-mock-native
+  jwt:
+    providers:
+      - name: keycloak
+        issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        audiences:
+          - ai-gateway
+        remoteJWKS:
+          uri: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway/protocol/openid-connect/certs
+          cacheDuration: 5m
+        claimToHeaders:
+          - claim: preferred_username
+            header: x-user-id
+          - claim: tier
+            header: x-auth-tier
+          - claim: org
+            header: x-org-id
+          - claim: team
+            header: x-team-id
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: big-tier
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: tier
+                valueType: String
+                values:
+                  - big
+          headers:
+            - name: x-ai-eg-model
+              values:
+                - kimi-k3
+                - glm-5.3
+                - deepseek-v4-pro
+      - name: deny-big-tier
+        action: Deny
+        principal:
+          headers:
+            - name: x-ai-eg-model
+              values:
+                - kimi-k3
+                - glm-5.3
+                - deepseek-v4-pro
+      - name: medium-tier
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: tier
+                valueType: String
+                values:
+                  - big
+                  - medium
+          headers:
+            - name: x-ai-eg-model
+              values:
+                - deepseek-v4-flash
+      - name: deny-medium-tier
+        action: Deny
+        principal:
+          headers:
+            - name: x-ai-eg-model
+              values:
+                - deepseek-v4-flash
+      - name: small-tier
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - name: tier
+                valueType: String
+                values:
+                  - big
+                  - medium
+                  - small

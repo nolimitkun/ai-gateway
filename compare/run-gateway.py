@@ -177,6 +177,33 @@ TENANT_ORG_CAP = 5
 TENANT_TEAM_CAP = 3
 TENANT_USERS = {"team_a": "carol", "team_b": "dave", "other_org": "erin"}
 
+# The hostname the native body-model routing overlay answers for, kept in step
+# with both overlays by scripts/validate-native-routing.py. The overlay runs
+# beside the body-based router rather than replacing it, so the same cluster
+# serves the same request either way and these rows are a comparison rather
+# than a before-and-after across two runs.
+NATIVE_HOST = "native.local"
+# Every model the BBR route maps, not one per accelerator class. The narrower
+# sample -- kimi-k3, deepseek-v4-flash, qwen3.8-27b, bge-m3 -- reported "4/4
+# pools" while four of the twelve models did not work natively at all on Envoy:
+# both h100 embedding models answered 500 and both rerankers 404, on a path
+# where the BBR route serves all twelve. One model per pool cannot see that,
+# because the four it picked happened to be the working ones.
+NATIVE_POOL_SAMPLES = (
+    ("/v1/chat/completions", {"model": "kimi-k3"}, "b300"),
+    ("/v1/chat/completions", {"model": "glm-5.3"}, "b300"),
+    ("/v1/chat/completions", {"model": "deepseek-v4-pro"}, "b300"),
+    ("/v1/chat/completions", {"model": "deepseek-v4-flash"}, "h200"),
+    ("/v1/chat/completions", {"model": "qwen3.8-27b"}, "h100"),
+    ("/v1/embeddings", {"model": "qwen3-embedding-8b", "input": "gateway inference"}, "h100"),
+    ("/v1/embeddings", {"model": "e5-mistral-7b-instruct", "input": "gateway inference"}, "h100"),
+    ("/v1/embeddings", {"model": "bge-m3", "input": "gateway inference"}, "l40s"),
+    ("/v1/embeddings", {"model": "jina-embeddings-v3", "input": "gateway inference"}, "l40s"),
+    ("/v1/embeddings", {"model": "nomic-embed-text-v2-moe", "input": "gateway inference"}, "l40s"),
+    ("/v1/rerank", {"model": "bge-reranker-v2-m3", "query": "gateway", "documents": ["a", "b"]}, "l40s"),
+    ("/v1/rerank", {"model": "jina-reranker-v2-base-multilingual", "query": "gateway", "documents": ["a", "b"]}, "l40s"),
+)
+
 
 def probe_tenants(cfg: dict, cluster: str) -> dict:
     """Measure whether org/team limit buckets nest, share, or go unenforced.
@@ -339,6 +366,172 @@ def probe_router_fail_open(cfg: dict, access_token: str) -> str:
         )
         wait_for_router(cfg, access_token)
     return f"explicit {explicit} / auto {auto} / restored"
+
+
+def native_payload(path: str, sample: dict) -> dict:
+    return {**sample, "messages": CHAT["messages"]} if path.endswith("completions") else sample
+
+
+def native_routing_present(cfg: dict, cluster: str) -> bool:
+    """Is the no-BBR overlay installed on this cluster?"""
+    object_name = {
+        "ai-gw-envoy": "aigatewayroute/kserve-mock-native",
+        "ai-gw-agent": "agentgatewaymodel/kimi-k3",
+    }.get(cluster)
+    return bool(object_name) and bool(kube_json(cfg, "ai-demo", object_name))
+
+
+def probe_native_routing(cfg: dict, access_token: str) -> str:
+    """Do the model rules reach their pools with the body-based router gone?
+
+    Reaching the right pool is only half the claim: BBR is still running on
+    the other hostname, and a shared filter chain would let it write the
+    routing header for this request too. So the processor is scaled to zero
+    and one request repeated. A pool reached with no BBR pod alive cannot have
+    been reached through BBR.
+    """
+    reached = []
+    for path, sample, accelerator in NATIVE_POOL_SAMPLES:
+        # Twelve models is enough traffic that a single cold pool shows up as a
+        # miss. One retry separates that from a model the path genuinely cannot
+        # serve, which is what this row exists to report.
+        for attempt in range(2):
+            code, body, _ = json_call(
+                cfg, path, access_token, native_payload(path, sample), {"host": NATIVE_HOST},
+            )
+            ok = code == 200 and body.get("mock_accelerator") == accelerator
+            if ok:
+                break
+        reached.append(ok)
+    if not all(reached):
+        missed = ", ".join(
+            sample["model"] for (_, sample, _), ok in zip(NATIVE_POOL_SAMPLES, reached) if not ok
+        )
+        return f"{sum(reached)}/{len(reached)} models; missed {missed}"
+
+    deployment = kube_json(cfg, "ai-demo", "deployment/body-based-router")
+    if not deployment:
+        return f"{sum(reached)}/{len(reached)} models; BBR already absent"
+    replicas = deployment.get("spec", {}).get("replicas", 1)
+    kubectl(cfg, "-n", "ai-demo", "scale", "deployment/body-based-router", "--replicas=0")
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        pods = json.loads(kubectl(
+            cfg, "-n", "ai-demo", "get", "pod", "-l", "app=body-based-router", "-o", "json",
+        ))
+        if not pods.get("items"):
+            break
+        time.sleep(2)
+    else:
+        raise RuntimeError("body-based-router pod did not terminate for the native probe")
+    try:
+        path, sample, accelerator = NATIVE_POOL_SAMPLES[0]
+        code, body, _ = json_call(
+            cfg, path, access_token, native_payload(path, sample), {"host": NATIVE_HOST},
+        )
+        without_bbr = code == 200 and body.get("mock_accelerator") == accelerator
+    finally:
+        kubectl(
+            cfg, "-n", "ai-demo", "scale", "deployment/body-based-router",
+            f"--replicas={replicas}",
+        )
+        kubectl(
+            cfg, "-n", "ai-demo", "rollout", "status", "deployment/body-based-router",
+            "--timeout=420s",
+        )
+    return (
+        f"{sum(reached)}/{len(reached)} models, still routed with BBR scaled to 0"
+        if without_bbr
+        else f"{sum(reached)}/{len(reached)} models, but not with BBR scaled to 0 "
+             f"(HTTP {code}, pool {body.get('mock_accelerator')})"
+    )
+
+
+def probe_native_spoof(cfg: dict, cluster: str, access_token: str) -> str:
+    """Can a client pick its own pool by forging the model header?
+
+    On the BBR path the answer is no, because BBR overwrites the header from
+    the body. The native path has no such filter: Envoy AI Gateway derives
+    `x-ai-eg-model` itself, and whether that derivation overwrites a client
+    value or merely fills in a missing one is not something any schema says.
+    The body asks for the H100 model and the header for a B300 one, so the
+    pool that answers names the winner.
+    """
+    if cluster != "ai-gw-envoy":
+        return "No client-visible model header"
+    code, body, _ = json_call(
+        cfg, "/v1/chat/completions", access_token,
+        {"model": "qwen3.8-27b", "messages": CHAT["messages"]},
+        {"host": NATIVE_HOST, "x-ai-eg-model": "kimi-k3"},
+    )
+    pool = body.get("mock_accelerator")
+    if code == 200 and pool == "h100":
+        return "Body wins; forged header ignored"
+    if code == 200 and pool == "b300":
+        return "FORGEABLE -- client header chose the pool"
+    return f"Inconclusive (HTTP {code}, pool {pool})"
+
+
+def probe_native_tier_ceiling(cfg: dict) -> str:
+    """Does the tier ceiling still bind with no routing header to gate on?
+
+    This is the question the overlay exists to answer. Envoy re-points the
+    same rule at the header its own processor writes, which only binds if that
+    processor runs before authorization -- a filter-order question. agentgateway
+    attaches the rule to the model itself, where no ordering is involved.
+
+    Both rungs of the ceiling are measured, because a rule that names the wrong
+    tier fails in only one direction: Dave is medium, so he must be refused the
+    big-tier model and served the medium one, and Carol is big, so she reaches
+    both.
+    """
+    dave, carol = token(cfg, "dave"), token(cfg, "carol")
+    dave_big, _, _ = json_call(
+        cfg, "/v1/chat/completions", dave, BIG_CHAT, {"host": NATIVE_HOST},
+    )
+    carol_big, _, _ = json_call(
+        cfg, "/v1/chat/completions", carol, BIG_CHAT, {"host": NATIVE_HOST},
+    )
+    dave_medium, _, _ = json_call(
+        cfg, "/v1/chat/completions", dave,
+        {"model": "deepseek-v4-flash", "messages": CHAT["messages"]},
+        {"host": NATIVE_HOST},
+    )
+    summary = f"big: medium {dave_big} / big {carol_big}; medium: medium {dave_medium}"
+    if dave_big == 403 and carol_big == 200 and dave_medium == 200:
+        return f"Held ({summary})"
+    if dave_big == 200:
+        return f"OPEN -- medium tier reached a big model ({summary})"
+    return summary
+
+
+def probe_native_gaps(cfg: dict, access_token: str) -> str:
+    """What does not follow a caller who switches to the native hostname.
+
+    Three things could be left behind, and which ones are is a per-stack
+    answer rather than a property of the idea. The model catalog is a bodyless
+    GET, so no rule that matches on a model name can match it. `auto` is
+    resolved by the semantic router, which is attached to the BBR route on
+    Envoy but to the Gateway on agentgateway, so it follows on one and not the
+    other. Speech is multipart, which no body-model mechanism here reads, and
+    every transcription model is small-tier and served by the shared fixture on
+    both paths -- so it should follow, and this records whether it does.
+
+    Rate limiting is deliberately not probed here: it shares one bucket with
+    the request_limit row, and spending it would corrupt that measurement. It
+    was measured by hand instead and does follow -- see docs/open-questions.md.
+    """
+    catalog, _, _ = json_call(cfg, "/v1/models", access_token, None, {"host": NATIVE_HOST})
+    auto, _, _ = json_call(
+        cfg, "/v1/chat/completions", access_token,
+        {"model": "auto", "messages": CHAT["messages"]}, {"host": NATIVE_HOST},
+    )
+    speech, _, _ = request(
+        cfg["base"] + "/v1/audio/transcriptions", method="POST",
+        headers={"authorization": f"Bearer {access_token}", "host": NATIVE_HOST},
+        multipart={"file": ("native.wav", b"", "audio/wav"), "model": "mock-whisper"},
+    )
+    return f"catalog {catalog} / auto {auto} / speech {speech}"
 
 
 def policy_summary(cfg: dict) -> tuple[bool, str]:
@@ -764,6 +957,32 @@ def run(cluster: str, sample_count: int) -> dict:
             403: "Denied by small tier (HTTP 403)",
             200: "GRANTED -- tenant metadata bypassed tier (HTTP 200)",
         }.get(frank_big, f"Inconclusive (HTTP {frank_big})")
+
+        # Native body-model routing: the same request, routed without the
+        # external body-based router every stack currently runs. Istio has no
+        # body-aware routing API, so that column reports the capability
+        # difference rather than a measurement of one.
+        if cluster == "ai-gw-kuadrant":
+            native = "No body-aware routing API (raw EnvoyFilter drives BBR)"
+            result.update({
+                "native_routing": native,
+                "native_spoof": native,
+                "native_tier_ceiling": native,
+                "native_gaps": native,
+            })
+        elif not native_routing_present(cfg, cluster):
+            not_installed = "Not installed (make native-routing)"
+            result.update({
+                "native_routing": not_installed,
+                "native_spoof": not_installed,
+                "native_tier_ceiling": not_installed,
+                "native_gaps": not_installed,
+            })
+        else:
+            result["native_routing"] = probe_native_routing(cfg, access_token)
+            result["native_spoof"] = probe_native_spoof(cfg, cluster, access_token)
+            result["native_tier_ceiling"] = probe_native_tier_ceiling(cfg)
+            result["native_gaps"] = probe_native_gaps(cfg, access_token)
         if cluster == "ai-gw-agent":
             result.update({
                 "tenant_nesting": "Needs an external rate limit service",
@@ -779,7 +998,7 @@ def run(cluster: str, sample_count: int) -> dict:
         else:
             result["token_limit"] = probe_limit(cfg, access_token, ("x-token-limit-probe", "true"), 6, BIG_CHAT)
     else:
-        for key in ("authentication", "task_authentication", "identity_headers", "authorization", "tier_authorization", "tier_ceiling", "tier_independent_of_tenant", "request_limit", "rate_scope", "quota_limit", "tenant_nesting", "tenant_header_spoof", "tenant_route_scope", "token_limit"):
+        for key in ("authentication", "task_authentication", "identity_headers", "authorization", "tier_authorization", "tier_ceiling", "tier_independent_of_tenant", "request_limit", "rate_scope", "quota_limit", "tenant_nesting", "tenant_header_spoof", "tenant_route_scope", "token_limit", "native_routing", "native_spoof", "native_tier_ceiling", "native_gaps"):
             result[key] = "No policy" if not policies_present else "Token error"
 
     code, _, cors_headers = request(

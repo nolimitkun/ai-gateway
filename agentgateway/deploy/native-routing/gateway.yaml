@@ -1,0 +1,44 @@
+# The base Gateway with one extra listener.
+#
+# AgentgatewayModel has parentRefs and no hostnames field, so a model attaches
+# to a Gateway or to one of its listeners -- there is no way to scope it to a
+# hostname from the model itself. A dedicated listener is therefore what keeps
+# this overlay from taking over the cluster: the models parent to `native`,
+# which answers only for native.local, and the `http` listener keeps serving
+# the BBR path unchanged. Removing the overlay re-applies deploy/gateway/.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+metadata:
+  name: local-nodeport
+  namespace: ai-demo
+spec:
+  service:
+    spec:
+      type: NodePort
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ai-gateway
+  namespace: ai-demo
+spec:
+  gatewayClassName: agentgateway
+  infrastructure:
+    parametersRef:
+      group: agentgateway.dev
+      kind: AgentgatewayParameters
+      name: local-nodeport
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: native
+      protocol: HTTP
+      port: 80
+      hostname: native.local
+      allowedRoutes:
+        namespaces:
+          from: Same

@@ -20,3 +20,10 @@ from one place; `make validate` keeps those copies synchronized.
 The KServe Kustomizations include the same OpenShift-aligned cross-namespace
 Gateway references, cert-manager certificates, and `BackendTLSPolicy` resources
 used before this directory reorganization.
+
+There is no `native-routing/` here, and that absence is the measurement. Istio
+has no body-aware routing API -- `VirtualService`, `EnvoyFilter` and
+`WasmPlugin` carry nothing that reads `body.model` -- which is why this profile
+drives BBR from a raw `EnvoyFilter` with one patch per model rule while the
+other two stacks have a first-class API for it. The comparison reports the
+capability difference rather than a measurement of one.
