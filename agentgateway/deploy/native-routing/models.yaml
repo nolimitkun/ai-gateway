@@ -1,0 +1,324 @@
+# Native model routing for agentgateway: no body-based router involved.
+#
+# agentgateway v1.4.1 reads the model out of the request itself. The
+# AgentgatewayModel CRD describes `match.model` as the "Model name matched
+# against client requests", and a `Custom` provider's backendRef "may target
+# only a namespace-local Service or InferencePool" -- which is exactly the
+# BBR path's destination. So the twelve model-to-pool mappings in
+# kserve/pools/route.yaml can be expressed without the header BBR writes.
+#
+# Models attach to a Gateway, not to a hostname: the CRD has parentRefs and no
+# hostnames field. To keep the overlay non-destructive they are parented to a
+# dedicated `native` listener, added by this directory's gateway.yaml and
+# carrying the native.local hostname, so the ordinary BBR path keeps serving
+# every other request in the same cluster.
+#
+# The four models above small tier carry their own authorization rule. That is
+# the part with no equivalent on the other stacks: the tier ceiling lives on
+# the model rather than on a header test, so it cannot be bypassed by a client
+# forging a routing header, and it survives BBR being deleted. The rule is the
+# same CEL the header-based policy uses, minus the header test -- being
+# attached to kimi-k3 already says which tier it governs, so the expression
+# only has to name the ceiling.
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: kimi-k3
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: kimi-k3
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-b300-inference-pool
+    formats:
+      - type: Completions
+  policies:
+    # The big-tier ceiling, expressed where the model is defined rather than
+    # as a header test on a routing header no longer being written.
+    # `Require` is cumulative here as it is for traffic rules, so this
+    # stacks on top of the listener-wide small-tier rule.
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - 'jwt.tier == "big"'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: glm-5.3
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: glm-5.3
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-b300-inference-pool
+    formats:
+      - type: Completions
+  policies:
+    # The big-tier ceiling, expressed where the model is defined rather than
+    # as a header test on a routing header no longer being written.
+    # `Require` is cumulative here as it is for traffic rules, so this
+    # stacks on top of the listener-wide small-tier rule.
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - 'jwt.tier == "big"'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: deepseek-v4-pro
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: deepseek-v4-pro
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-b300-inference-pool
+    formats:
+      - type: Completions
+  policies:
+    # The big-tier ceiling, expressed where the model is defined rather than
+    # as a header test on a routing header no longer being written.
+    # `Require` is cumulative here as it is for traffic rules, so this
+    # stacks on top of the listener-wide small-tier rule.
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - 'jwt.tier == "big"'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: deepseek-v4-flash
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: deepseek-v4-flash
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-h200-inference-pool
+    formats:
+      - type: Completions
+  policies:
+    # The one medium-tier model. A ceiling admits its own tier and everything
+    # above it, so this names both rather than testing equality.
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - 'jwt.tier in ["big", "medium"]'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: qwen3.8-27b
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: qwen3.8-27b
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-h100-inference-pool
+    formats:
+      - type: Completions
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: qwen3-embedding-8b
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: qwen3-embedding-8b
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-h100-inference-pool
+    formats:
+      - type: Embeddings
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: e5-mistral-7b-instruct
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: e5-mistral-7b-instruct
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-h100-inference-pool
+    formats:
+      - type: Embeddings
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: bge-m3
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: bge-m3
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-l40s-inference-pool
+    formats:
+      - type: Embeddings
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: jina-embeddings-v3
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: jina-embeddings-v3
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-l40s-inference-pool
+    formats:
+      - type: Embeddings
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: nomic-embed-text-v2-moe
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: nomic-embed-text-v2-moe
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-l40s-inference-pool
+    formats:
+      - type: Embeddings
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: bge-reranker-v2-m3
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: bge-reranker-v2-m3
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-l40s-inference-pool
+    formats:
+      - type: Rerank
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: jina-reranker-v2-base-multilingual
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  match:
+    model: jina-reranker-v2-base-multilingual
+  provider: Custom
+  custom:
+    backendRef:
+      group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kserve-l40s-inference-pool
+    formats:
+      - type: Rerank

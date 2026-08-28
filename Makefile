@@ -67,6 +67,12 @@ semantic-router: check-cluster ## attach semantic routing to one cluster's chat 
 semantic-router-down: check-cluster ## remove semantic routing from one cluster
 	bash scripts/deploy-semantic-router.sh --delete --context "$(CONTEXT)"
 
+native-routing: check-cluster ## route body.model natively, without BBR (Envoy and agentgateway only)
+	bash scripts/deploy-native-routing.sh --context "$(CONTEXT)"
+
+native-routing-down: check-cluster ## remove native body-model routing from one cluster
+	bash scripts/deploy-native-routing.sh --delete --context "$(CONTEXT)"
+
 keycloak: check-cluster ## install or refresh the Keycloak realm in one cluster
 	bash scripts/install-keycloak.sh "$(CONTEXT)"
 
@@ -168,6 +174,7 @@ validate: ## check manifests and router config offline
 	$(PYTHON) scripts/validate-router-config.py
 	$(PYTHON) scripts/validate-tenant-model.py
 	$(PYTHON) scripts/validate-tier-contract.py
+	$(PYTHON) scripts/validate-native-routing.py
 
 vllm-production: ## deploy pinned vLLM services (set VLLM_CONTEXT)
 	@test -n "$(VLLM_CONTEXT)" || { echo 'set VLLM_CONTEXT to a kubectl context' >&2; exit 2; }

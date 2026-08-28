@@ -29,7 +29,9 @@ client-forged internal header; clients never choose an accelerator header.
 completion through all three stacks hop by hop -- every filter in the order it
 actually runs, the object that put it there, and the header and body deltas,
 read from `/config_dump` on the running proxies rather than from these
-manifests. Open it in a browser; it is self-contained.
+manifests. Its last section covers the path that runs without a body-based
+router at all, and why two stacks can route that way and still not drop the
+router. Open it in a browser; it is self-contained.
 
 [docs/open-questions.md](docs/open-questions.md) lists the decisions this
 repository has deferred -- places where the current behaviour was a side effect
@@ -64,6 +66,8 @@ below separates live behavior from schema-only and path-limited capabilities.
 | Per-identity buckets | CEL counters are supported; this pinned Istio fixture uses shared probe buckets because Authorino identity metadata is not exposed to the 1.5.2 Wasm rate-limit action | Header descriptors | CEL descriptors in global mode; local mode is shared per proxy |
 | Nested limit buckets (org/team/user) | One named limit per level, each with its own CEL `counters` — but nothing the caller cannot forge actually keys them here | One global rule per level; `shared: true` would span routes but silently disables the token budget, so buckets stay per-route | `local` takes no key and `conditional` is first-match-wins, so only `rateLimit.global` nests — needs an external rate-limit service |
 | Group hierarchy in rules | Exact `incl`, or a CEL `predicate` over the path claim | Exact claim values only; no prefix or regex, so nesting needs a flattened claim | CEL `startsWith` over the group path claim |
+| Body-model routing | No body-aware routing API; a raw `EnvoyFilter` drives the external BBR | `AIGatewayRoute` extracts the model from the request content before the routing decision | `AgentgatewayModel` `match.model` with a `Custom` provider pointing at the `InferencePool` |
+| Per-model authorization | Header test on the routing header BBR writes | Header test on the routing header, whichever filter wrote it | `AgentgatewayModel` `policies.authorization`, attached to the model itself |
 | CORS | No Kuadrant CORS policy; not enabled in this Istio fixture | `SecurityPolicy` `cors` | `traffic.cors` |
 | LLM request shaping | Not provided by the compared policy | `AIGatewayRoute` body/header mutation | Model aliases, prompt prepend/append, and caching |
 | Prompt guardrails | Not provided by the compared policy | Not provided by the compared policy | `backend.ai.promptGuard` |
@@ -84,7 +88,7 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-27 22:50 (30 requests) | 2026-08-27 22:42 (30 requests) | 2026-08-27 22:44 (30 requests) |
+| Last isolated comparison (UTC) | 2026-08-28 00:29 (30 requests) | 2026-08-28 10:53 (30 requests) | 2026-08-28 10:49 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
@@ -99,14 +103,14 @@ zero-delay Python runtime, not production performance benchmarks.
 | Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
 | Tiered chat models | big/medium/small | big/medium/small | big/medium/small |
 | Embeddings API | Yes | Yes | Yes |
-| RAG embedding models | Yes | Yes | Yes |
+| RAG embedding models | No | Yes | Yes |
 | Embedding dimension validation | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected |
 | Reranking API | Yes | Yes | Yes |
 | Speech-to-text API | Yes | Yes | Yes |
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
 | Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
 | Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
-| Local chat p50 | 44 ms | 44 ms | 52 ms |
+| Local chat p50 | 31 ms | 47 ms | 52 ms |
 | Policy objects reporting ready | 3/3 | 3/3 | 6/6 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
 | Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
@@ -114,7 +118,7 @@ zero-delay Python runtime, not production performance benchmarks.
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
 | Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | b300 / h200 / h100 |
 | Decision headers returned to the client | big / medium / small | big / medium / small | big / medium / small |
-| Auto-routed chat p50 | 31 ms | 21 ms | 13 ms |
+| Auto-routed chat p50 | 86 ms | 38 ms | 15 ms |
 | Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 500 / auto 500 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
@@ -126,10 +130,14 @@ zero-delay Python runtime, not production performance benchmarks.
 | Tenant metadata cannot bypass tier | Denied by small tier (HTTP 403) | Denied by small tier (HTTP 403) | Denied by small tier (HTTP 403) |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
 | Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
-| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
+| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 1 of 6; shared bucket |
 | Nested org/team buckets (org 5, team 3) | unenforced: team A no 429 in 4; team B no 429 in 4; other org no 429 in 3 | nested: team A 429 on request 4 of 4; team B 429 on request 2 of 4; other org no 429 in 3 | Needs an external rate limit service |
 | Forged tenant header | HONOURED -- bucket escaped (HTTP 200) | Ignored (HTTP 429) | Not applicable without tenant buckets |
 | Tenant bucket across both routes | Single inference route | SEPARATE bucket per route -- ceiling doubled | Single inference route |
+| Body-model routing without BBR | No body-aware routing API (raw EnvoyFilter drives BBR) | 8/12 models with BBR scaled to 0; missed qwen3-embedding-8b, e5-mistral-7b-instruct, bge-reranker-v2-m3, jina-reranker-v2-base-multilingual | 5/12 models with BBR scaled to 0; missed qwen3-embedding-8b, e5-mistral-7b-instruct, bge-m3, jina-embeddings-v3, nomic-embed-text-v2-moe, bge-reranker-v2-m3, jina-reranker-v2-base-multilingual |
+| Native path: forged model header | No body-aware routing API (raw EnvoyFilter drives BBR) | Body wins; forged header ignored | No client-visible model header |
+| Native path: tier ceiling | No body-aware routing API (raw EnvoyFilter drives BBR) | Held (big: medium 403 / big 200; medium: medium 200) | Held (big: medium 403 / big 200; medium: medium 200) |
+| Native path: catalog / auto / speech | No body-aware routing API (raw EnvoyFilter drives BBR) | catalog 200 / auto 404 / speech 200 | catalog 200 / auto 200 / speech 200 |
 | Token limit (100 tokens per minute) | 429 on request 3 of 6 | 429 on request 3 of 6 | Not available on KServe InferencePool |
 | CORS preflight answered | No (HTTP 405) | Yes (HTTP 200) | Yes (HTTP 200) |
 | Unapproved CORS origin | No allow-origin (HTTP 405) | No allow-origin (HTTP 200) | No allow-origin (HTTP 200) |
@@ -253,6 +261,8 @@ make pools CLUSTER=ai-gw-envoy
 make pools-down CLUSTER=ai-gw-envoy
 make policies-down CLUSTER=ai-gw-envoy
 make semantic-router-down CLUSTER=ai-gw-envoy
+make native-routing CLUSTER=ai-gw-envoy
+make native-routing-down CLUSTER=ai-gw-envoy
 make stop-cluster CLUSTER=ai-gw-envoy
 make down CLUSTER=ai-gw-envoy
 ```
@@ -620,6 +630,101 @@ body-based pool routing. OpenAI speech-to-text is multipart, so its `model`
 form field cannot be extracted by this BBR release and remains on a dedicated
 shared-fixture route section. Every transcription model is small-tier, so the
 ordinary small-tier ceiling policy is sufficient for that section.
+
+### Routing on the body without a body-based router
+
+BBR is deployed identically in all three clusters, which makes it look like a
+requirement. It is one for exactly one of them.
+
+Reading the vendored CRDs rather than the deployment: the `AIGatewayRoute`
+schema states that `x-ai-eg-model` "is available if we want to describe the
+routing behavior based on the model name. The model name is extracted from the
+request content before the routing decision", and `AgentgatewayModel` matches
+`model` "against client requests" while a `Custom` provider's `backendRef`
+"may target only a namespace-local Service or InferencePool". Istio has
+neither, which is why the OpenShift profile drives BBR from a raw
+`EnvoyFilter` carrying a per-route patch for every model rule.
+
+Note what does *not* replace BBR: header transformation. Every stack has it,
+and none of it can read a JSON body -- agentgateway's `ai.transformations` CEL
+does, but it writes body fields rather than routing.
+
+`make native-routing CLUSTER=<name>` installs the same twelve model-to-pool
+mappings in each stack's own body-aware API, on the `native.local` hostname so
+the BBR path keeps serving everything else in the same cluster. The comparison
+then sends the same request down both paths, and scales BBR to zero to show
+which one actually depended on it.
+
+The `native_gaps` row was added expecting things not to follow a caller who
+switches hostname. Measured, almost everything does. The model catalog answers
+200 on both stacks, multipart speech answers 200 on both -- every transcription
+model is small-tier and served by the shared fixture either way -- and `auto`
+answers 200 on agentgateway, where the semantic router is attached to the
+Gateway rather than to a route or listener, so it runs on the native listener
+too and resolves the alias before the model rules see it. On Envoy the router
+is attached to the BBR route, and `auto` is the one thing that does not follow:
+404. Rate limiting also follows, sharing one bucket with the default host; it
+is recorded in `docs/open-questions.md` rather than as a row, because probing
+it would spend the bucket the `request_limit` row measures. The mechanism
+behind the catalog answering is not established; only that it does.
+
+`Body-model routing without BBR` counts models, not pools, and every one of
+them is sent while the body-based router is stopped. Two earlier versions of
+this row were wrong in the same direction. The first sampled one model per
+accelerator class and reported "4/4 pools" while a third of the catalog did not
+route natively on Envoy at all -- the four it picked were the working ones. The
+second counted all twelve but counted them with BBR still running, then
+re-sent a single chat model with it stopped, so successes BBR had produced were
+reported as native ones. The count now comes from the stopped-state sweep
+alone.
+
+The interesting difference is authorization, not routing. The tier ceiling
+reads the header BBR writes, so removing BBR removes what the rule tests
+against. agentgateway has a native answer -- `policies.authorization` on the
+model itself, which no client can reach around by forging a header, and where
+being attached to `kimi-k3` already says which tier the rule governs.
+Envoy AI Gateway has no equivalent, so the overlay re-points the same rules at
+`x-ai-eg-model` and the comparison reports whether ext_authz observes a header
+its own AI processor writes. Both rungs are measured, since a rule naming the
+wrong tier fails in only one direction. `make validate` refuses an overlay that
+leaves those rules gating on the header nothing writes there, that puts a model
+behind a different tier than the BBR path does, that lets org or team stand in
+for the tier claim, or that leaves the new hostname unauthenticated.
+
+None of this makes BBR removable, which is the more useful result. BBR is not
+really a router: it is an external process that writes a header into an
+ordinary `HTTPRoute`'s match space, and everything downstream composes with it
+because everything downstream speaks plain Gateway API -- named rules, an
+`EnvoyExtensionPolicy` targeting a `sectionName`, a `SecurityPolicy` matching
+the same header, rate-limit descriptors keyed on the rule name. The native APIs
+are closed routing objects that own the decision and expose nothing to attach
+to. They replace BBR's extraction, not its composability.
+
+Concretely: `AIGatewayRoute.rules` has no `name` field in either API version,
+so the chat-only semantic router cannot be scoped to chat -- attached to the
+whole route it answers embeddings and rerank with its own 404, and omitted,
+`auto` disappears. agentgateway's models 404 on the default listener however
+they are attached, and its `traffic.transformation` cannot read the request
+body to write the header itself. Removing BBR naively on Envoy is worse than
+inert: with its `ext_proc` attachments deleted every request still returned
+200, from the shared CPU fixture, and a medium-tier token was served `kimi-k3`,
+because routing and authorization gate on the same header and failed open
+together.
+
+agentgateway's `AgentgatewayModel` routing does not take effect at all, which
+only became visible once the count was taken with BBR stopped. It reads 5/12,
+and none of those five come from the models: deleting all twelve changes
+nothing, and suppressing the semantic router's header transformation drops
+every model to the shared fixture with the models still installed. The
+resources carry no `status`, and the data plane never attributes a route to
+one. So the five are the semantic router writing `x-gateway-model-name`
+itself, and the seven task models were BBR all along. Whether that is a
+manifest error here or a limitation of agentgateway v1.4.1 is not established;
+the manifests ship because they are the reproduction. The same follows for the
+per-model tier rules in that file -- they cannot be what holds the ceiling on
+`native.local`, since nothing in the file takes effect.
+
+`docs/open-questions.md` records each dead end with what was measured.
 
 ### Production vLLM
 
@@ -1085,12 +1190,13 @@ Each `<gateway>/deploy/` directory has the same component-level shape:
 | `kserve/gpu/` | Optional placement and device requests for the mock pools |
 | `kserve/production/` | Pinned vLLM runtime and four real task-specific services |
 | `llm-d/` | BBR workload and that gateway's ext_proc/TLS attachment |
+| `native-routing/` | Optional body-model routing in the gateway's own API, on `native.local`, beside the BBR path (Envoy and agentgateway only) |
 | `keycloak/` | Identity workload, route, and gateway-specific Kustomization |
 | `policies/` | Gateway-native authentication, authorization, limits, quota, token, and CORS resources |
 | `semantic-router/` | Optional workload, synchronized router config, and gateway-specific attachment |
 
 Scripts select exactly one of these roots from the requested cluster/context.
-`make validate` verifies schemas throughout all three trees and requires 18
+`make validate` verifies schemas throughout all three trees and requires 17
 intentionally repeated shared manifests to remain byte-identical. Shared chart
 archives stay under the provider or `kserve/charts/`; the Keycloak realm JSON
 stays under `keycloak/realm/`. The top-level `kserve/production/` is retained as

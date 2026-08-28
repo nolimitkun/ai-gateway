@@ -1,0 +1,87 @@
+# Authentication and the small-tier floor for the native listener.
+#
+# Policies here target the listener rather than an HTTPRoute, because there is
+# no route on this path: an AgentgatewayModel is the routing object. Without
+# these two, native.local would serve the InferencePool with no token, and the
+# per-model tier rules in models.yaml would have no `jwt` context to
+# evaluate.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: kserve-mock-native-jwt
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      location:
+        header:
+          name: Authorization
+          prefix: "Bearer "
+      providers:
+        - issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+          audiences:
+            - ai-gateway
+          jwks:
+            remote:
+              backendRef:
+                name: keycloak
+                port: 8080
+              jwksPath: /realms/ai-gateway/protocol/openid-connect/certs
+              cacheDuration: 5m
+---
+# Every model served here is at least small tier, so the listener carries the
+# small-tier floor and models.yaml stacks the medium and big ceilings on top of
+# it. This mirrors policies/auth-policy.yaml on the BBR path, where the same
+# floor is attached to the route instead.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: kserve-mock-native-small-tier
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  traffic:
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - 'has(jwt.tier) && jwt.tier in ["big", "medium", "small"]'
+---
+# Which OpenAI API each path on this listener speaks.
+#
+# `ai.routes` keys are path suffixes matched with ends-with, and the CRD notes
+# that without them "all traffic defaults to `completions` type" -- which
+# would have agentgateway read an embedding or rerank body as a chat
+# completion. The three entries mirror the three JSON task paths BBR handles
+# on the other listener.
+#
+# Schema-valid against the vendored CRD as a backend policy on a listener;
+# whether agentgateway v1.4.1 honours it at that attachment point is one of
+# the things the comparison measures rather than asserts.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: kserve-mock-native-formats
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ai-gateway
+      sectionName: native
+  backend:
+    ai:
+      routes:
+        "/v1/chat/completions": Completions
+        "/v1/embeddings": Embeddings
+        "/v1/rerank": Rerank
