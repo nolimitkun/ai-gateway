@@ -607,7 +607,7 @@ footer {
     <dl class="objs stack-objs">
     <dt>entry point</dt><dd><b>Gateway</b>/ai-gateway <span class='ns'>ai-demo</span> <span class='sep'>·</span> <b>GatewayClass</b>/envoy-ai-gateway</dd>
     <dt>data plane</dt><dd><b>Deployment</b>/envoy-ai-demo-ai-gateway-f4fb961e <span class='ns'>envoy-gateway-system</span></dd>
-    <dt>control plane</dt><dd><b>Deployment</b>/envoy-gateway <span class='ns'>envoy-gateway-system</span> <span class='sep'>·</span> <b>EnvoyProxy</b>/ai-gateway-proxy</dd>
+    <dt>control plane</dt><dd><b>Deployment</b>/envoy-gateway <span class='ns'>envoy-gateway-system</span> <span class='sep'>·</span> <b>Deployment</b>/ai-gateway-controller <span class='ns'>envoy-ai-gateway-system</span> <span class='sep'>·</span> <b>Deployment</b>/llmisvc-controller-manager <span class='ns'>kserve</span> <span class='sep'>·</span> <b>EnvoyProxy</b>/ai-gateway-proxy</dd>
   </dl>
 
   <ol class="rail">
@@ -846,7 +846,7 @@ footer {
     <dl class="objs stack-objs">
     <dt>entry point</dt><dd><b>Gateway</b>/ai-gateway <span class='ns'>ai-demo</span> <span class='sep'>·</span> <b>AgentgatewayParameters</b>/local-nodeport</dd>
     <dt>data plane</dt><dd><b>Deployment</b>/ai-gateway <span class='ns'>ai-demo — the proxy runs beside the workloads</span></dd>
-    <dt>control plane</dt><dd><b>Deployment</b>/agentgateway <span class='ns'>agentgateway-system</span></dd>
+    <dt>control plane</dt><dd><b>Deployment</b>/agentgateway <span class='ns'>agentgateway-system</span> <span class='sep'>·</span> <b>Deployment</b>/llmisvc-controller-manager <span class='ns'>kserve</span></dd>
   </dl>
 
   <ol class="rail">
@@ -1048,7 +1048,7 @@ footer {
     <dl class="objs stack-objs">
     <dt>entry point</dt><dd><b>Gateway</b>/openshift-ai-inference <span class='ns'>openshift-ingress</span> <span class='sep'>·</span> <b>GatewayClass</b>/openshift-default</dd>
     <dt>data plane</dt><dd><b>Deployment</b>/openshift-ai-inference-openshift-default <span class='ns'>openshift-ingress</span></dd>
-    <dt>control plane</dt><dd><b>Kuadrant</b>/kuadrant <span class='ns'>kuadrant-system</span></dd>
+    <dt>control plane</dt><dd><b>Deployment</b>/istiod <span class='ns'>istio-system — owns the Gateway and its proxy</span> <span class='sep'>·</span> <b>Deployment</b>/kuadrant-operator-controller-manager <span class='ns'>kuadrant-system</span> <span class='sep'>·</span> <b>Deployment</b>/llmisvc-controller-manager <span class='ns'>kserve</span> <span class='sep'>·</span> <b>Kuadrant</b>/kuadrant</dd>
   </dl>
 
   <ol class="rail">
@@ -1163,7 +1163,7 @@ footer {
         <dl class="objs">
           <dt>declared by</dt><dd><b>AuthPolicy</b>/kserve-mock<span class="sep">·</span> <b>RateLimitPolicy</b>/kserve-mock<span class="sep">·</span> <b>TokenRateLimitPolicy</b>/kserve-mock</dd>
           <dt>calls</dt><dd><b>Service</b>/authorino-authorino-authorization <span class="ns">kuadrant-system</span><span class="sep">·</span> <b>Service</b>/limitador-limitador <span class="ns">kuadrant-system</span></dd>
-          <dt>backed by</dt><dd><b>Kuadrant</b>/kuadrant <span class="ns">kuadrant-system</span></dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/authorino <span class="ns">kuadrant-system</span> <span class="sep">·</span> <b>Deployment</b>/limitador-limitador <span class="ns">kuadrant-system</span> <span class="sep">·</span> <b>Kuadrant</b>/kuadrant</dd>
         </dl>
       </div>
     </li>
