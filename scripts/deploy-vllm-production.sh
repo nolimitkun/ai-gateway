@@ -73,11 +73,26 @@ fi
 # so the big and medium services hold their GPUs and never answer. The second
 # case is a manifest error, and scripts/validate-tier-contract.py checks each
 # stack's attachment offline; this gate catches the first.
-if [[ -n "$REQUIRED_POLICY" ]] &&
-   ! kubectl --context "$context" -n ai-demo get deployment body-based-router >/dev/null 2>&1; then
-  cluster=${context#kind-}
-  echo "production chat routing requires the body-based router; run 'make kserve CLUSTER=$cluster' first" >&2
-  exit 1
+if [[ -n "$REQUIRED_POLICY" ]]; then
+  if ! kubectl --context "$context" -n ai-demo get deployment body-based-router >/dev/null 2>&1; then
+    cluster=${context#kind-}
+    echo "production chat routing requires the body-based router; run 'make kserve CLUSTER=$cluster' first" >&2
+    exit 1
+  fi
+  # Existing is not the same as running, and the difference is measured: with
+  # the Deployment scaled to zero, `kubectl get`, `rollout status`, and `wait
+  # --for=condition=Available` all succeed. A Deployment whose spec.replicas is
+  # 0 is trivially available and reports Available=True. Only the replica count
+  # tells a running router from a stopped one.
+  bbr_deadline=$((SECONDS + 300))
+  until [[ "$(kubectl --context "$context" -n ai-demo get deployment body-based-router \
+      -o jsonpath='{.status.availableReplicas}')" == [1-9]* ]]; do
+    if ((SECONDS >= bbr_deadline)); then
+      echo "the body-based router has no available replica; every chat request would return 500" >&2
+      exit 1
+    fi
+    sleep 5
+  done
 fi
 
 for obsolete_policy in "${OBSOLETE_PRODUCTION_POLICIES[@]}"; do

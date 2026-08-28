@@ -805,8 +805,11 @@ make vllm-production-down VLLM_CONTEXT=my-gpu-context
 
 The deploy script fails before mutation if no node advertises allocatable
 `nvidia.com/gpu`, and on the three repository-owned contexts also if the
-body-based router is absent -- without it the big and medium services would
-hold their GPUs while every chat request fell through to the small one. GPU
+body-based router is not running -- not merely absent. A Deployment scaled to
+zero still satisfies `kubectl get`, `rollout status`, and
+`wait --for=condition=Available`, all three of which report success because a
+Deployment with `spec.replicas` 0 is trivially available; only the replica
+count separates a running router from a stopped one. GPU
 labels, model sizes, credentials, storage, and replica counts are reference
 defaults and should be overlaid for the target cluster; the big tier as shipped
 asks for eight B300 per service.

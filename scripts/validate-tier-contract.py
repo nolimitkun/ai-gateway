@@ -451,10 +451,6 @@ def main() -> int:
                 f"{sorted(unprovisioned)}; provisioned: {sorted(provisioned)}"
             )
 
-    def expected_ceiling(routes: set[str]) -> set[str]:
-        """The tiers a policy covering exactly these routes must admit."""
-        return set().union(*(TIER_CEILING[PRODUCTION_TIERS[route]] for route in routes))
-
     def routes_at(tier: str) -> set[str]:
         return {route for route, value in PRODUCTION_TIERS.items() if value == tier}
 
@@ -492,8 +488,25 @@ def main() -> int:
     envoy_security = [doc for doc in envoy_production if doc["kind"] == "SecurityPolicy"]
     covered: list[str] = []
     for document in envoy_security:
+        name = document["metadata"]["name"]
         routes = target_names(document)
         covered.extend(routes)
+        unknown = routes - set(PRODUCTION_TIERS)
+        if unknown:
+            problems.append(f"Envoy production '{name}' targets unknown routes {sorted(unknown)}")
+            continue
+        # One policy, one tier. Envoy is the only stack whose policies target
+        # several routes at once, so it is the only one that could span two
+        # tiers -- and a policy spanning small and big has to admit small
+        # somewhere, which is exactly how the big route stops being big.
+        tiers = {PRODUCTION_TIERS[route] for route in routes}
+        if len(tiers) != 1:
+            problems.append(
+                f"Envoy production '{name}' targets {sorted(tiers)} tier routes together; "
+                f"one SecurityPolicy must not span tiers"
+            )
+            continue
+        tier = next(iter(tiers))
         rules = document["spec"]["authorization"]["rules"]
         admitted = {
             value
@@ -502,10 +515,10 @@ def main() -> int:
             if claim["name"] == "tier"
             for value in claim["values"]
         }
-        if admitted != expected_ceiling(routes):
+        if admitted != TIER_CEILING[tier]:
             problems.append(
-                f"Envoy production '{document['metadata']['name']}' admits {sorted(admitted)} "
-                f"for {sorted(routes)}, expected {sorted(expected_ceiling(routes))}"
+                f"Envoy production '{name}' admits {sorted(admitted)} for {tier}-tier routes "
+                f"{sorted(routes)}, expected {sorted(TIER_CEILING[tier])}"
             )
     if sorted(covered) != sorted(all_routes):
         problems.append(
