@@ -27,11 +27,12 @@ client-forged internal header; clients never choose an accelerator header.
 
 [docs/inference-path-atlas.html](docs/inference-path-atlas.html) traces one chat
 completion through all three stacks hop by hop -- every filter in the order it
-actually runs, the object that put it there, and the header and body deltas,
-read from `/config_dump` on the running proxies rather than from these
-manifests. Its last section covers the path that runs without a body-based
-router at all, and why two stacks can route that way and still not drop the
-router. Open it in a browser; it is self-contained.
+actually runs, the Kubernetes objects that declare it, that it calls out to,
+and that stand behind those, and the header and body deltas, read from
+`/config_dump` and from the running clusters rather than from these manifests.
+Its last section covers the path that runs without a body-based router at all,
+and why two stacks can route that way and still not drop the router. Open it in
+a browser; it is self-contained.
 
 [docs/open-questions.md](docs/open-questions.md) lists the decisions this
 repository has deferred -- places where the current behaviour was a side effect

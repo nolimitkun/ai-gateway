@@ -326,6 +326,45 @@ ul.notes li { margin-bottom: 8px; }
 .delta .k { color: var(--ink); }
 .delta .c { color: var(--faint); }
 
+/* ---------- kubernetes objects ---------- */
+
+.objs {
+  border-top: 1px solid var(--rule);
+  padding: 10px 16px 11px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 14px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--muted);
+  overflow-x: auto;
+}
+.objs dt {
+  font-family: var(--display);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+  text-align: right;
+  margin: 0;
+}
+.objs dd { margin: 0; overflow-wrap: anywhere; }
+.objs b { font-weight: 600; color: var(--hue); }
+.objs.stack-objs {
+  border-top: 0;
+  border-left: 2px solid var(--hue);
+  background: var(--sunken);
+  padding: 11px 15px;
+  margin: 0 0 22px;
+}
+.objs .ns { color: var(--faint); }
+.objs .sep { color: var(--rule-strong); padding: 0 2px; }
+.hop.passive .objs b { color: var(--faint); }
+
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -496,13 +535,14 @@ footer {
 <header class="masthead">
   <div class="eyebrow">ai-gateway &middot; branch claude/mock-more-models-ivqcly</div>
   <h1>Inference Path Atlas</h1>
-  <p class="standfirst">One OpenAI chat completion, traced hop by hop through all three gateway stacks &mdash; every filter in the order it actually runs, the Kubernetes object that put it there, and what it does to the headers and the body on the way past.</p>
+  <p class="standfirst">One OpenAI chat completion, traced hop by hop through all three gateway stacks &mdash; every filter in the order it actually runs, the Kubernetes objects that declare it, that it calls out to, and that stand behind those, and what it does to the headers and the body on the way past.</p>
 
   <dl class="provenance">
     <div><dt>Measured</dt><dd>2026-08-27<br>three live kind clusters</dd></div>
     <div><dt>Filter order</dt><dd>Envoy <span class="mono">/config_dump</span><br>read off the running proxy</dd></div>
     <div><dt>Header deltas</dt><dd>echoed by the KServe<br>mock runtime at the pod</dd></div>
     <div><dt>Identity</dt><dd>Keycloak realm<br><span class="mono">ai-gateway</span></dd></div>
+    <div><dt>Object names</dt><dd>read back from the<br>three live clusters</dd></div>
     <div><dt>Since first published</dt><dd>agentgateway auto<br>routing fixed &mdash; §07</dd></div>
   </dl>
 
@@ -564,6 +604,12 @@ footer {
   </div>
   <p class="deck">Everything is a typed Gateway API policy, and the resulting Envoy filter chain is legible: authenticate, transform, authorize, meter, pick an endpoint. Authentication happens before any external processor runs, and authorization happens after &mdash; which is exactly what lets the RBAC rules match a header BBR invented.</p>
 
+    <dl class="objs stack-objs">
+    <dt>entry point</dt><dd><b>Gateway</b>/ai-gateway <span class='ns'>ai-demo</span> <span class='sep'>·</span> <b>GatewayClass</b>/envoy-ai-gateway</dd>
+    <dt>data plane</dt><dd><b>Deployment</b>/envoy-ai-demo-ai-gateway-f4fb961e <span class='ns'>envoy-gateway-system</span></dd>
+    <dt>control plane</dt><dd><b>Deployment</b>/envoy-gateway <span class='ns'>envoy-gateway-system</span> <span class='sep'>·</span> <b>Deployment</b>/ai-gateway-controller <span class='ns'>envoy-ai-gateway-system</span> <span class='sep'>·</span> <b>Deployment</b>/llmisvc-controller-manager <span class='ns'>kserve</span> <span class='sep'>·</span> <b>EnvoyProxy</b>/ai-gateway-proxy</dd>
+  </dl>
+
   <ol class="rail">
 
     <li class="hop">
@@ -578,6 +624,10 @@ footer {
           <div class="a"><span class="sig">+</span><span class="k">access-control-allow-origin: https://console.example.com</span>  <span class="c">(response, preflight only)</span></div>
           <div class="a"><span class="sig">+</span><span class="k">access-control-allow-methods: GET, POST, OPTIONS</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>SecurityPolicy</b>/kserve-mock <span class='ns'>.cors</span></dd>
+          <dt>attached to</dt><dd><b>HTTPRoute</b>/kserve-mock</dd>
+        </dl>
       </div>
     </li>
 
@@ -599,6 +649,11 @@ footer {
           <div class="a"><span class="sig">+</span><span class="k">x-team-id: research</span>       <span class="c">← team (tenant limits only)</span></div>
           <div class="x"><span class="sig">✕</span><span class="k">401 · www-authenticate: Bearer realm="…" · body "Jwt is missing"</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>SecurityPolicy</b>/kserve-mock <span class='ns'>.jwt</span></dd>
+          <dt>calls</dt><dd><b>Service</b>/keycloak:8080 <span class='ns'>JWKS</span></dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/keycloak<span class="sep">·</span> <b>ConfigMap</b>/keycloak-realm</dd>
+        </dl>
       </div>
     </li>
 
@@ -613,6 +668,10 @@ footer {
         <div class="delta">
           <div class="a"><span class="sig">+</span><span class="k">metadata io.envoy.ai_gateway:llm_input_token / llm_output_token / llm_total_token</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>AIGatewayRoute</b>/kserve-mock-ai</dd>
+          <dt>runs in</dt><dd><b>Deployment</b>/envoy-ai-demo-ai-gateway-f4fb961e <span class="ns">envoy-gateway-system</span> <span class='ns'>container ai-gateway-extproc</span></dd>
+        </dl>
       </div>
     </li>
 
@@ -633,6 +692,11 @@ footer {
           <div class="a"><span class="sig">+</span><span class="k">x-selected-model: kimi-k3</span>                   <span class="c">(request)</span></div>
           <div class="a"><span class="sig">+</span><span class="k">x-vsr-selected-decision / -model / -confidence / -matched-keywords</span>  <span class="c">(response)</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>EnvoyExtensionPolicy</b>/model-body-router-chat <span class='ns'>extProc[0]</span></dd>
+          <dt>calls</dt><dd><b>Service</b>/semantic-router:50051</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/semantic-router<span class="sep">·</span> <b>ConfigMap</b>/semantic-router-config</dd>
+        </dl>
       </div>
     </li>
 
@@ -644,6 +708,11 @@ footer {
           <span class="res">EnvoyExtensionPolicy</span>
         </div>
         <div class="hop-body"><p>The same BBR image, attached to the <code>embeddings</code> and <code>rerank</code> sections. Chat traffic skips it; the semantic router never sees an embeddings body, which is deliberate &mdash; the router implements OpenAI chat only.</p></div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>EnvoyExtensionPolicy</b>/model-body-router-tasks</dd>
+          <dt>calls</dt><dd><b>Backend</b>/body-based-router <span class='ns'>→</span> <b>Service</b>/body-based-router:9004</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/body-based-router</dd>
+        </dl>
       </div>
     </li>
 
@@ -662,6 +731,11 @@ footer {
           <div class="r"><span class="sig">~</span><span class="k">x-gateway-model-name: &lt;forged or absent&gt; → kimi-k3</span>   <span class="c">← body.model</span></div>
           <div class="a"><span class="sig">↻</span><span class="k">route cache cleared → rule 12 (chat) re-matches to rule 0 (model-kimi-k3)</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>EnvoyExtensionPolicy</b>/model-body-router-chat <span class='ns'>extProc[1]</span></dd>
+          <dt>calls</dt><dd><b>Backend</b>/body-based-router <span class='ns'>→</span> <b>Service</b>/body-based-router:9004</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/body-based-router</dd>
+        </dl>
       </div>
     </li>
 
@@ -684,6 +758,10 @@ footer {
           <div class="c"><span class="sig"> </span>5 small-tier     <span class="k">Allow</span>  claim tier∈{big,medium,small}</div>
           <div class="x"><span class="sig">✕</span><span class="k">403 · body "RBAC: access denied"</span>   <span class="c">medium ceiling requesting big</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>SecurityPolicy</b>/kserve-mock <span class='ns'>.authorization</span></dd>
+          <dt>attached to</dt><dd><b>HTTPRoute</b>/kserve-mock</dd>
+        </dl>
       </div>
     </li>
 
@@ -704,6 +782,11 @@ footer {
           <div class="a"><span class="sig">+</span><span class="k">x-ratelimit-reset: 28</span></div>
           <div class="x"><span class="sig">✕</span><span class="k">429 on request 6 of 8 · token budget 429 on request 3 of 6</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>BackendTrafficPolicy</b>/kserve-mock</dd>
+          <dt>calls</dt><dd><b>Service</b>/envoy-ratelimit <span class="ns">envoy-gateway-system</span></dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/envoy-ratelimit <span class="ns">envoy-gateway-system</span><span class="sep">·</span> <b>Service</b>/redis <span class="ns">redis-system</span><span class="sep">·</span> <b>Deployment</b>/redis <span class="ns">redis-system</span></dd>
+        </dl>
       </div>
     </li>
 
@@ -719,6 +802,11 @@ footer {
           <div class="a"><span class="sig">+</span><span class="k">x-session-token: &lt;base64 pod identity&gt;</span>   <span class="c">(response)</span></div>
           <div class="a"><span class="sig">+</span><span class="k">x-went-into-resp-headers: true</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>InferencePool</b>/kserve-mock-inference-pool <span class='ns'>via backendRef</span></dd>
+          <dt>calls</dt><dd><b>Service</b>/kserve-mock-epp-service:9002</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/kserve-mock-kserve-router-scheduler<span class="sep">·</span> <b>ClusterRole</b>/envoy-gateway-inference-access</dd>
+        </dl>
       </div>
     </li>
 
@@ -730,6 +818,11 @@ footer {
           <span class="res none">Envoy built-in</span>
         </div>
         <div class="hop-body"><p>Dispatch to the chosen pod. The response body is not rewritten by any gateway filter on the way back &mdash; the <code>mock_*</code> fields in it are the fixture describing what it received.</p></div>
+        <dl class="objs">
+          <dt>routes to</dt><dd><b>Service</b>/kserve-mock-kserve-workload-svc:8000</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/kserve-mock-kserve<span class="sep">·</span> <b>ConfigMap</b>/mock-llm-src</dd>
+          <dt>declared by</dt><dd><b>LLMInferenceService</b>/kserve-mock<span class="sep">·</span> <b>LLMInferenceServiceConfig</b>/kserve-config-llm-template</dd>
+        </dl>
       </div>
     </li>
   </ol>
@@ -750,6 +843,12 @@ footer {
   </div>
   <p class="deck">Five policies against one route plus one against the Gateway, all in a single CRD. The ordering that matters here is not a filter list but a declared <em>phase</em> &mdash; and this stack has exactly one external-processing slot per phase, which is the constraint the whole chat path is built around. See section 07.</p>
 
+    <dl class="objs stack-objs">
+    <dt>entry point</dt><dd><b>Gateway</b>/ai-gateway <span class='ns'>ai-demo</span> <span class='sep'>·</span> <b>AgentgatewayParameters</b>/local-nodeport</dd>
+    <dt>data plane</dt><dd><b>Deployment</b>/ai-gateway <span class='ns'>ai-demo — the proxy runs beside the workloads</span></dd>
+    <dt>control plane</dt><dd><b>Deployment</b>/agentgateway <span class='ns'>agentgateway-system</span> <span class='sep'>·</span> <b>Deployment</b>/llmisvc-controller-manager <span class='ns'>kserve</span></dd>
+  </dl>
+
   <ol class="rail">
 
     <li class="hop">
@@ -767,6 +866,12 @@ footer {
           <div class="r"><span class="sig">~</span><span class="k">body.model: "auto" → "kimi-k3"</span>   <span class="c">· system prompt replaced</span></div>
           <div class="a"><span class="sig">+</span><span class="k">x-selected-model: kimi-k3</span>        <span class="c">(request) · x-vsr-* (response)</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>AgentgatewayPolicy</b>/model-body-router <span class='ns'>extProc arm 1</span></dd>
+          <dt>targets</dt><dd><b>Gateway</b>/ai-gateway</dd>
+          <dt>calls</dt><dd><b>Service</b>/semantic-router:50051</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/semantic-router<span class="sep">·</span> <b>ConfigMap</b>/semantic-router-config</dd>
+        </dl>
       </div>
     </li>
 
@@ -784,6 +889,11 @@ footer {
         <div class="delta">
           <div class="r"><span class="sig">~</span><span class="k">x-gateway-model-name := body.model</span>   <span class="c">tasks only</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>AgentgatewayPolicy</b>/model-body-router <span class='ns'>extProc arm 2</span></dd>
+          <dt>calls</dt><dd><b>AgentgatewayBackend</b>/body-based-router <span class='ns'>→</span> <b>Service</b>/body-based-router:9004</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/body-based-router</dd>
+        </dl>
       </div>
     </li>
 
@@ -805,6 +915,10 @@ footer {
           <div class="c"><span class="sig"> </span>chat with no selection → header cleared, so a forged value cannot survive</div>
           <div class="c"><span class="sig"> </span>tasks → neither arm matches, BBR's header preserved</div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>AgentgatewayPolicy</b>/model-body-router <span class='ns'>.traffic.transformation</span></dd>
+          <dt>targets</dt><dd><b>Gateway</b>/ai-gateway</dd>
+        </dl>
       </div>
     </li>
 
@@ -816,6 +930,10 @@ footer {
           <span class="res none">HTTPRoute · kserve-mock</span>
         </div>
         <div class="hop-body"><p>The sixteen rules from section 01, matched once, against the header the phase above produced. There is no route-cache reset in this design because there was never a first pass to discard.</p></div>
+        <dl class="objs">
+          <dt>matched on</dt><dd><b>HTTPRoute</b>/kserve-mock</dd>
+          <dt>selects</dt><dd><b>InferencePool</b>/kserve-mock-inference-pool <span class='ns'>and the four pool variants</span></dd>
+        </dl>
       </div>
     </li>
 
@@ -828,6 +946,11 @@ footer {
         </div>
         <div class="hop-body"><p>Keycloak issuer and audience, JWKS fetched through a <code>backendRef</code> rather than a URL. Strict means an unauthenticated request never reaches the InferencePool. Measured: <strong>401</strong>.</p>
         <p>Nothing is exported from the token. The verified claims stay inside the proxy for CEL to read &mdash; which is why the pod sees no identity headers at all.</p></div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>AgentgatewayPolicy</b>/kserve-mock-jwt</dd>
+          <dt>calls</dt><dd><b>Service</b>/keycloak:8080 <span class='ns'>JWKS via backendRef</span></dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/keycloak<span class="sep">·</span> <b>ConfigMap</b>/keycloak-realm</dd>
+        </dl>
       </div>
     </li>
 
@@ -848,6 +971,9 @@ footer {
           <div class="c"><span class="sig"> </span>resolved tier != big || jwt.tier == big</div>
           <div class="x"><span class="sig">✕</span><span class="k">403 · content-type text/plain · body "authorization failed"</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>AgentgatewayPolicy</b>/kserve-mock-small-tier<span class="sep">·</span> <b>AgentgatewayPolicy</b>/kserve-mock-medium-tier<span class="sep">·</span> <b>AgentgatewayPolicy</b>/kserve-mock-big-tier</dd>
+        </dl>
       </div>
     </li>
 
@@ -859,6 +985,9 @@ footer {
           <span class="res">AgentgatewayPolicy · kserve-mock-cors</span>
         </div>
         <div class="hop-body"><p>Same origin allow-list as the Envoy stack, expressed as a traffic policy rather than a security one. Preflight measured at <strong>200</strong> &mdash; but only once the pre-routing conditions gained their method guard, since this now runs after them.</p></div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>AgentgatewayPolicy</b>/kserve-mock-cors</dd>
+        </dl>
       </div>
     </li>
 
@@ -876,6 +1005,10 @@ footer {
         <div class="delta">
           <div class="x"><span class="sig">✕</span><span class="k">429 on request 6 of 8 (5/min) · quota 3/hour, shared bucket</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>AgentgatewayPolicy</b>/kserve-mock-rate-limit</dd>
+          <dt>counted in</dt><dd><b>Deployment</b>/ai-gateway <span class='ns'>in-proxy, no limit service</span></dd>
+        </dl>
       </div>
     </li>
 
@@ -887,6 +1020,12 @@ footer {
           <span class="res none">inference.networking.k8s.io</span>
         </div>
         <div class="hop-body"><p>Endpoint selection is identical to the other two stacks; the same <code>x-session-token</code> and <code>x-went-into-resp-headers</code> come back. Token-based limits are unavailable on this path: agentgateway's token units need one of its own AI backends with tokenization enabled, and a Gateway API InferencePool does not publish that metadata.</p></div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>InferencePool</b>/kserve-mock-inference-pool</dd>
+          <dt>calls</dt><dd><b>Service</b>/kserve-mock-epp-service:9002</dd>
+          <dt>routes to</dt><dd><b>Service</b>/kserve-mock-kserve-workload-svc:8000</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/kserve-mock-kserve-router-scheduler<span class="sep">·</span> <b>Deployment</b>/kserve-mock-kserve<span class="sep">·</span> <b>ConfigMap</b>/mock-llm-src</dd>
+        </dl>
       </div>
     </li>
   </ol>
@@ -906,6 +1045,12 @@ footer {
   </div>
   <p class="deck">The one stack with no Gateway API surface for external processing, so both processors are raw <code>EnvoyFilter</code> patches. The consequence shows up in the ordering: Kuadrant's own policies all live in a single wasm filter near the end of the chain, which means every request is routed, transformed, and endpoint-picked <em>before</em> anyone checks who sent it.</p>
 
+    <dl class="objs stack-objs">
+    <dt>entry point</dt><dd><b>Gateway</b>/openshift-ai-inference <span class='ns'>openshift-ingress</span> <span class='sep'>·</span> <b>GatewayClass</b>/openshift-default</dd>
+    <dt>data plane</dt><dd><b>Deployment</b>/openshift-ai-inference-openshift-default <span class='ns'>openshift-ingress</span></dd>
+    <dt>control plane</dt><dd><b>Deployment</b>/istiod <span class='ns'>istio-system — owns the Gateway and its proxy</span> <span class='sep'>·</span> <b>Deployment</b>/kuadrant-operator-controller-manager <span class='ns'>kuadrant-system</span> <span class='sep'>·</span> <b>Deployment</b>/llmisvc-controller-manager <span class='ns'>kserve</span> <span class='sep'>·</span> <b>Kuadrant</b>/kuadrant</dd>
+  </dl>
+
   <ol class="rail">
 
     <li class="hop">
@@ -922,6 +1067,11 @@ footer {
           <div class="r"><span class="sig">~</span><span class="k">body.model: "auto" → "kimi-k3"</span> <span class="c">· system prompt replaced</span></div>
           <div class="a"><span class="sig">+</span><span class="k">x-selected-model</span> <span class="c">(request) · x-vsr-* (response)</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>EnvoyFilter</b>/semantic-router <span class="ns">openshift-ingress</span><span class="sep">·</span> <b>DestinationRule</b>/semantic-router <span class='ns'>mTLS off</span></dd>
+          <dt>calls</dt><dd><b>Service</b>/semantic-router:50051</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/semantic-router<span class="sep">·</span> <b>ConfigMap</b>/semantic-router-config</dd>
+        </dl>
       </div>
     </li>
 
@@ -933,6 +1083,9 @@ footer {
           <span class="res none">Istio built-in</span>
         </div>
         <div class="hop-body"><p>Mesh telemetry. No effect on the request.</p></div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><span class='ns'>none — Istio ships it in the chain</span></dd>
+        </dl>
       </div>
     </li>
 
@@ -951,6 +1104,11 @@ footer {
           <div class="r"><span class="sig">~</span><span class="k">x-gateway-model-name := body.model</span>  <span class="c">← the body the router rewrote</span></div>
           <div class="a"><span class="sig">↻</span><span class="k">route cache cleared → re-matches to model-kimi-k3</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>EnvoyFilter</b>/model-body-router <span class="ns">openshift-ingress</span><span class="sep">·</span> <b>DestinationRule</b>/body-based-router <span class='ns'>mTLS off</span></dd>
+          <dt>calls</dt><dd><b>Service</b>/body-based-router:9004</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/body-based-router</dd>
+        </dl>
       </div>
     </li>
 
@@ -962,6 +1120,12 @@ footer {
           <span class="res">InferencePool · KServe EPP</span>
         </div>
         <div class="hop-body"><p>Endpoint selection &mdash; and note where it sits. On a request with no token at all, the measured 401 still carried an <code>x-session-token</code>, which is the endpoint picker's stamp. The pod was chosen before the caller was identified.</p></div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>InferencePool</b>/kserve-mock-inference-pool</dd>
+          <dt>calls</dt><dd><b>Service</b>/kserve-mock-epp-service:9002 <span class='ns'>TLS</span></dd>
+          <dt>secured by</dt><dd><b>BackendTLSPolicy</b>/kserve-mock-epp<span class="sep">·</span> <b>Certificate</b>/kserve-mock-epp-server<span class="sep">·</span> <b>Secret</b>/kserve-mock-epp-tls<span class="sep">·</span> <b>ConfigMap</b>/kserve-mock-epp-ca</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/kserve-mock-kserve-router-scheduler</dd>
+        </dl>
       </div>
     </li>
 
@@ -973,6 +1137,9 @@ footer {
           <span class="res none">Istio built-in</span>
         </div>
         <div class="hop-body"><p>The CORS filter is present but unconfigured: no Kuadrant policy in this repository writes a CORS rule, and a preflight measures <strong>405</strong> rather than an allow-list. That is a real gap in the column, not a rendering of it.</p></div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><span class='ns'>none — Istio ships them in the chain</span></dd>
+        </dl>
       </div>
     </li>
 
@@ -993,6 +1160,11 @@ footer {
           <div class="x"><span class="sig">✕</span><span class="k">403 · x-ext-auth-reason: "the token tier does not allow the resolved model tier"</span></div>
           <div class="x"><span class="sig">✕</span><span class="k">429 · token budget spent on request 4 of 6 (100/min)</span></div>
         </div>
+        <dl class="objs">
+          <dt>declared by</dt><dd><b>AuthPolicy</b>/kserve-mock<span class="sep">·</span> <b>RateLimitPolicy</b>/kserve-mock<span class="sep">·</span> <b>TokenRateLimitPolicy</b>/kserve-mock</dd>
+          <dt>calls</dt><dd><b>Service</b>/authorino-authorino-authorization <span class="ns">kuadrant-system</span><span class="sep">·</span> <b>Service</b>/limitador-limitador <span class="ns">kuadrant-system</span></dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/authorino <span class="ns">kuadrant-system</span> <span class="sep">·</span> <b>Deployment</b>/limitador-limitador <span class="ns">kuadrant-system</span> <span class="sep">·</span> <b>Kuadrant</b>/kuadrant</dd>
+        </dl>
       </div>
     </li>
 
@@ -1004,6 +1176,11 @@ footer {
           <span class="res none">Envoy built-in</span>
         </div>
         <div class="hop-body"><p>The upstream is reached last, on the endpoint chosen at hop 4.</p></div>
+        <dl class="objs">
+          <dt>routes to</dt><dd><b>Service</b>/kserve-mock-kserve-workload-svc:8000</dd>
+          <dt>backed by</dt><dd><b>Deployment</b>/kserve-mock-kserve<span class="sep">·</span> <b>ConfigMap</b>/mock-llm-src</dd>
+          <dt>declared by</dt><dd><b>LLMInferenceService</b>/kserve-mock</dd>
+        </dl>
       </div>
     </li>
   </ol>
