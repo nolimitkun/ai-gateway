@@ -1,3 +1,19 @@
+# One HTTPRoute per production service. Chat is the only task with more than
+# one model, so its five services share /v1/chat/completions and are separated
+# by the X-Gateway-Model-Name header the body-based router writes from
+# body.model. Gateway API ranks a rule with a header match above the otherwise
+# identical rule without one, so the unheadered `chat` rule below is the
+# fallback that also serves the `auto` alias.
+#
+# The tier ceiling is attached per route, not per header value: a forged
+# X-Gateway-Model-Name can only move a caller onto a different route, and that
+# route's own policy still applies. BBR overwrites the header on every rule
+# named here in any case.
+#
+# Every rule name is vllm- prefixed. Istio addresses BBR's per-route enablement
+# by Envoy route name, and on a cluster that also carries the mock fixture the
+# unprefixed names (chat, embeddings, rerank) are already taken by
+# HTTPRoute/kserve-mock.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -7,13 +23,99 @@ metadata:
 spec:
   parentRefs: [{name: ai-gateway}]
   rules:
-    - matches:
+    - name: vllm-chat
+      matches:
         - path: {type: Exact, value: /v1/chat/completions}
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-chat-inference-pool
+      timeouts: {request: 300s}
+    # The catalog GET carries no body for BBR to read and is not tier-gated
+    # beyond the shared small-tier ceiling.
+    - name: vllm-models
+      matches:
         - path: {type: PathPrefix, value: /v1/models}
       backendRefs:
         - group: inference.networking.k8s.io
           kind: InferencePool
           name: vllm-chat-inference-pool
+      timeouts: {request: 300s}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vllm-kimi-k3
+  namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: big}
+spec:
+  parentRefs: [{name: ai-gateway}]
+  rules:
+    - name: vllm-chat-kimi-k3
+      matches:
+        - path: {type: Exact, value: /v1/chat/completions}
+          headers: [{name: x-gateway-model-name, value: kimi-k3}]
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-kimi-k3-inference-pool
+      timeouts: {request: 300s}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vllm-glm-5-3
+  namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: big}
+spec:
+  parentRefs: [{name: ai-gateway}]
+  rules:
+    - name: vllm-chat-glm-5-3
+      matches:
+        - path: {type: Exact, value: /v1/chat/completions}
+          headers: [{name: x-gateway-model-name, value: glm-5.3}]
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-glm-5-3-inference-pool
+      timeouts: {request: 300s}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vllm-deepseek-v4-pro
+  namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: big}
+spec:
+  parentRefs: [{name: ai-gateway}]
+  rules:
+    - name: vllm-chat-deepseek-v4-pro
+      matches:
+        - path: {type: Exact, value: /v1/chat/completions}
+          headers: [{name: x-gateway-model-name, value: deepseek-v4-pro}]
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-deepseek-v4-pro-inference-pool
+      timeouts: {request: 300s}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vllm-deepseek-v4-flash
+  namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: medium}
+spec:
+  parentRefs: [{name: ai-gateway}]
+  rules:
+    - name: vllm-chat-deepseek-v4-flash
+      matches:
+        - path: {type: Exact, value: /v1/chat/completions}
+          headers: [{name: x-gateway-model-name, value: deepseek-v4-flash}]
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-deepseek-v4-flash-inference-pool
       timeouts: {request: 300s}
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -25,7 +127,8 @@ metadata:
 spec:
   parentRefs: [{name: ai-gateway}]
   rules:
-    - matches:
+    - name: vllm-embeddings
+      matches:
         - path: {type: Exact, value: /v1/embeddings}
       backendRefs:
         - group: inference.networking.k8s.io
@@ -42,7 +145,8 @@ metadata:
 spec:
   parentRefs: [{name: ai-gateway}]
   rules:
-    - matches:
+    - name: vllm-rerank
+      matches:
         - path: {type: Exact, value: /rerank}
         - path: {type: Exact, value: /v1/rerank}
         - path: {type: Exact, value: /v2/rerank}
@@ -61,7 +165,10 @@ metadata:
 spec:
   parentRefs: [{name: ai-gateway}]
   rules:
-    - matches:
+    # Multipart bodies are outside BBR v1.2.1 and every speech model is small,
+    # so this route needs no model header to stay unambiguous.
+    - name: vllm-transcription
+      matches:
         - path: {type: Exact, value: /v1/audio/transcriptions}
       backendRefs:
         - group: inference.networking.k8s.io

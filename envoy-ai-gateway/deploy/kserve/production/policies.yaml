@@ -1,5 +1,8 @@
-# Every model in this production profile is small-tier, so one route-attached
-# policy applies JWT and the tier ceiling to all four APIs.
+# Production carries all three tiers, so the ceiling is attached per route
+# rather than once for the whole profile. A route is reachable only by a token
+# whose tier claim reaches that route's label: big routes want `big`, the
+# medium route accepts `big` or `medium`, and the small routes accept any of
+# the three. Nothing here reads org, team, group, or plan.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy
 metadata:
@@ -34,3 +37,97 @@ spec:
     allowOrigins: ["https://console.example.com"]
     allowMethods: [GET, POST, OPTIONS]
     allowHeaders: [authorization, content-type]
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: vllm-medium-tier
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-flash}
+  jwt:
+    providers:
+      -
+        name: keycloak
+        issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        audiences: [ai-gateway]
+        remoteJWKS:
+          uri: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway/protocol/openid-connect/certs
+          cacheDuration: 5m
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: medium-tier
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - {name: tier, valueType: String, values: [big, medium]}
+  cors:
+    allowOrigins: ["https://console.example.com"]
+    allowMethods: [GET, POST, OPTIONS]
+    allowHeaders: [authorization, content-type]
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: vllm-big-tier
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-kimi-k3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-glm-5-3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-pro}
+  jwt:
+    providers:
+      -
+        name: keycloak
+        issuer: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        audiences: [ai-gateway]
+        remoteJWKS:
+          uri: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway/protocol/openid-connect/certs
+          cacheDuration: 5m
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: big-tier
+        action: Allow
+        principal:
+          jwt:
+            provider: keycloak
+            claims:
+              - {name: tier, valueType: String, values: [big]}
+  cors:
+    allowOrigins: ["https://console.example.com"]
+    allowMethods: [GET, POST, OPTIONS]
+    allowHeaders: [authorization, content-type]
+---
+# Five chat services share /v1/chat/completions, so production needs the same
+# body-based router the fixture uses. The mock's EnvoyExtensionPolicy targets
+# HTTPRoute/kserve-mock sections only; this is the production equivalent.
+#
+# It must cover the unheadered fallback as well as every model rule, so that a
+# client-forged X-Gateway-Model-Name is overwritten even when that header is
+# what selected the route in the first place.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: model-body-router-vllm
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-chat, sectionName: vllm-chat}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-kimi-k3, sectionName: vllm-chat-kimi-k3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-glm-5-3, sectionName: vllm-chat-glm-5-3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-pro, sectionName: vllm-chat-deepseek-v4-pro}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-flash, sectionName: vllm-chat-deepseek-v4-flash}
+  extProc:
+    - backendRefs:
+        - {group: gateway.envoyproxy.io, kind: Backend, name: body-based-router}
+      failOpen: false
+      messageTimeout: 10s
+      processingMode:
+        request: {body: Buffered}
+        response: {}

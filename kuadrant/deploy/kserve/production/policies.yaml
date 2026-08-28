@@ -1,10 +1,147 @@
-# Every model in this production profile is small-tier. Separate AuthPolicies
-# keep Keycloak reachable while applying the same tier ceiling to each route.
+# Production carries all three tiers, so the ceiling is attached per route
+# rather than once for the whole profile. Kuadrant has no cross-route policy,
+# so each route gets its own AuthPolicy: the Keycloak authentication block is
+# identical everywhere and only the admitted tier claims differ. Nothing here
+# reads org, team, group, or plan.
+---
 apiVersion: kuadrant.io/v1
 kind: AuthPolicy
 metadata: {name: vllm-chat, namespace: ai-demo}
 spec:
   targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-chat}
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader: {prefix: Bearer}
+    authorization:
+      small-tier:
+        patternMatching:
+          patterns:
+            - any:
+                - {selector: auth.identity.tier, operator: eq, value: big}
+                - {selector: auth.identity.tier, operator: eq, value: medium}
+                - {selector: auth.identity.tier, operator: eq, value: small}
+    response:
+      unauthenticated:
+        code: 401
+        message: {value: "a Keycloak access token is required"}
+      unauthorized:
+        code: 403
+        message: {value: "the token identity is not allowed to call this model tier"}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata: {name: vllm-kimi-k3, namespace: ai-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-kimi-k3}
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader: {prefix: Bearer}
+    authorization:
+      big-tier:
+        patternMatching:
+          patterns:
+            - any:
+                - {selector: auth.identity.tier, operator: eq, value: big}
+    response:
+      unauthenticated:
+        code: 401
+        message: {value: "a Keycloak access token is required"}
+      unauthorized:
+        code: 403
+        message: {value: "the token identity is not allowed to call this model tier"}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata: {name: vllm-glm-5-3, namespace: ai-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-glm-5-3}
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader: {prefix: Bearer}
+    authorization:
+      big-tier:
+        patternMatching:
+          patterns:
+            - any:
+                - {selector: auth.identity.tier, operator: eq, value: big}
+    response:
+      unauthenticated:
+        code: 401
+        message: {value: "a Keycloak access token is required"}
+      unauthorized:
+        code: 403
+        message: {value: "the token identity is not allowed to call this model tier"}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata: {name: vllm-deepseek-v4-pro, namespace: ai-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-pro}
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader: {prefix: Bearer}
+    authorization:
+      big-tier:
+        patternMatching:
+          patterns:
+            - any:
+                - {selector: auth.identity.tier, operator: eq, value: big}
+    response:
+      unauthenticated:
+        code: 401
+        message: {value: "a Keycloak access token is required"}
+      unauthorized:
+        code: 403
+        message: {value: "the token identity is not allowed to call this model tier"}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata: {name: vllm-deepseek-v4-flash, namespace: ai-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-flash}
+  rules:
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
+        credentials:
+          authorizationHeader: {prefix: Bearer}
+    authorization:
+      medium-tier:
+        patternMatching:
+          patterns:
+            - any:
+                - {selector: auth.identity.tier, operator: eq, value: big}
+                - {selector: auth.identity.tier, operator: eq, value: medium}
+    response:
+      unauthenticated:
+        code: 401
+        message: {value: "a Keycloak access token is required"}
+      unauthorized:
+        code: 403
+        message: {value: "the token identity is not allowed to call this model tier"}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata: {name: vllm-embedding, namespace: ai-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-embedding}
   rules:
     authentication:
       keycloak:
@@ -58,34 +195,6 @@ spec:
 ---
 apiVersion: kuadrant.io/v1
 kind: AuthPolicy
-metadata: {name: vllm-embedding, namespace: ai-demo}
-spec:
-  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-embedding}
-  rules:
-    authentication:
-      keycloak:
-        jwt:
-          issuerUrl: http://keycloak.ai-demo.svc.cluster.local:8080/realms/ai-gateway
-        credentials:
-          authorizationHeader: {prefix: Bearer}
-    authorization:
-      small-tier:
-        patternMatching:
-          patterns:
-            - any:
-                - {selector: auth.identity.tier, operator: eq, value: big}
-                - {selector: auth.identity.tier, operator: eq, value: medium}
-                - {selector: auth.identity.tier, operator: eq, value: small}
-    response:
-      unauthenticated:
-        code: 401
-        message: {value: "a Keycloak access token is required"}
-      unauthorized:
-        code: 403
-        message: {value: "the token identity is not allowed to call this model tier"}
----
-apiVersion: kuadrant.io/v1
-kind: AuthPolicy
 metadata: {name: vllm-transcription, namespace: ai-demo}
 spec:
   targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-transcription}
@@ -111,3 +220,57 @@ spec:
       unauthorized:
         code: 403
         message: {value: "the token identity is not allowed to call this model tier"}
+---
+# Five chat services share /v1/chat/completions, so production needs the same
+# body-based router the fixture uses. Istio has no Gateway API policy for BBR,
+# and llm-d/kuadrant-extproc.yaml disables the filter at the virtual host and
+# re-enables it per Envoy route name -- names taken from HTTPRoute/kserve-mock.
+# Production's route sections are not in that list, so without this filter BBR
+# never runs on them and every chat request falls to the unheadered rule.
+#
+# It covers the unheadered fallback as well as every model rule, so a
+# client-forged X-Gateway-Model-Name is overwritten even when that header is
+# what selected the route in the first place.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: model-body-router-vllm
+  namespace: openshift-ingress
+spec:
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: openshift-ai-inference
+  configPatches:
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: vllm-chat}}}}
+      patch: &vllm_bbr_patch
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            ai.gateway.body_based_router:
+              '@type': type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              overrides:
+                processing_mode:
+                  request_header_mode: SEND
+                  response_header_mode: SKIP
+                  request_body_mode: BUFFERED
+                  response_body_mode: NONE
+                  request_trailer_mode: SKIP
+                  response_trailer_mode: SKIP
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: outbound|9004||body-based-router.ai-demo.svc.cluster.local
+                  timeout: 10s
+                failure_mode_allow: false
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: vllm-chat-kimi-k3}}}}
+      patch: *vllm_bbr_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: vllm-chat-glm-5-3}}}}
+      patch: *vllm_bbr_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: vllm-chat-deepseek-v4-pro}}}}
+      patch: *vllm_bbr_patch
+    - applyTo: HTTP_ROUTE
+      match: {context: GATEWAY, routeConfiguration: {vhost: {route: {name: vllm-chat-deepseek-v4-flash}}}}
+      patch: *vllm_bbr_patch

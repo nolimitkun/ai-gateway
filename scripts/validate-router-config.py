@@ -35,6 +35,7 @@ POOL_ROUTE = STACK_ROOTS[0] / "kserve" / "pools" / "route.yaml"
 KUADRANT_ROUTER = STACK_ROOTS[0] / "semantic-router" / "kuadrant-extproc.yaml"
 AGENT_ROUTER = STACK_ROOTS[2] / "semantic-router" / "agentgateway-extproc.yaml"
 AGENT_BBR = STACK_ROOTS[2] / "llm-d" / "agentgateway-extproc.yaml"
+EXTERNAL_BBR = ROOT / "kserve" / "production" / "body-based-router.yaml"
 EXPECTED_DECISION_TIERS = {
     "big": "big",
     "medium": "medium",
@@ -109,6 +110,15 @@ def main():
             problems.append(
                 f"shared component '{relative}' differs between gateway trees"
             )
+
+    # The external production bundle ships BBR itself, because five chat
+    # services share /v1/chat/completions and an arbitrary context has no
+    # llm-d/ tree to install it from. It must not drift from the copy the three
+    # gateway profiles run.
+    if EXTERNAL_BBR.read_bytes() != (STACK_ROOTS[0] / "llm-d" / "body-based-router.yaml").read_bytes():
+        problems.append(
+            "kserve/production/body-based-router.yaml differs from the gateway trees' copy"
+        )
 
     config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     providers = config["providers"]

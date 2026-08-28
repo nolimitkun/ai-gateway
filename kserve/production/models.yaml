@@ -1,5 +1,9 @@
-# A vLLM process loads one model/task. Keep model aliases synchronized with the
-# request bodies used by scripts/validate-vllm-contract.py.
+# A vLLM process loads one model/task, so every model in the catalog that this
+# profile serves is its own independently scalable service. The three tiers are
+# all represented: the label on each service is the ceiling a caller's `tier`
+# claim must reach, and the gateway policy attached to the matching route is
+# what enforces it. Keep model aliases synchronized with the request bodies
+# used by scripts/validate-vllm-contract.py.
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
@@ -16,9 +20,10 @@ spec:
   template:
     containers:
       - name: main
-        # vLLM accepts multiple served names and answers with the first. With
-        # one chat model in this production profile, auto is a safe alias for
-        # the concrete small-tier model rather than an ungoverned model.
+        # vLLM accepts multiple served names and answers with the first. auto
+        # stays an alias for the concrete small-tier model: it names no model
+        # the tier ladder governs, so BBR leaves it on this route and it can
+        # never reach a tier the caller has not been granted.
         args: [--served-model-name, qwen3.8-27b, auto, --port, "8000", --max-model-len, "32768", --gpu-memory-utilization, "0.90"]
         resources:
           requests: {cpu: "4", memory: 24Gi, nvidia.com/gpu: "1"}
@@ -29,6 +34,119 @@ spec:
   router:
     gateway: {refs: [{name: ai-gateway, namespace: ai-demo}]}
     route: {http: {refs: [{name: vllm-chat}]}}
+---
+# Big tier. The three largest chat models in the catalog share the B300 pool:
+# highest-memory cards, tensor parallel across the whole node. Only a token
+# whose tier claim is exactly `big` may reach these routes.
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: vllm-kimi-k3
+  namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: big}
+spec:
+  baseRefs: [{name: vllm-production}]
+  model:
+    uri: hf://moonshotai/Kimi-K3
+    name: kimi-k3
+  storageInitializer: {enabled: true}
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        args: [--served-model-name, kimi-k3, --port, "8000", --max-model-len, "262144", --tensor-parallel-size, "8", --gpu-memory-utilization, "0.90"]
+        resources:
+          requests: {cpu: "32", memory: 192Gi, nvidia.com/gpu: "8"}
+          limits: {cpu: "64", memory: 384Gi, nvidia.com/gpu: "8"}
+    nodeSelector: {nvidia.com/gpu.product: NVIDIA-B300}
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  router:
+    gateway: {refs: [{name: ai-gateway, namespace: ai-demo}]}
+    route: {http: {refs: [{name: vllm-kimi-k3}]}}
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: vllm-glm-5-3
+  namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: big}
+spec:
+  baseRefs: [{name: vllm-production}]
+  model:
+    uri: hf://zai-org/GLM-5.3
+    name: glm-5.3
+  storageInitializer: {enabled: true}
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        args: [--served-model-name, glm-5.3, --port, "8000", --max-model-len, "204800", --tensor-parallel-size, "8", --gpu-memory-utilization, "0.90"]
+        resources:
+          requests: {cpu: "32", memory: 192Gi, nvidia.com/gpu: "8"}
+          limits: {cpu: "64", memory: 384Gi, nvidia.com/gpu: "8"}
+    nodeSelector: {nvidia.com/gpu.product: NVIDIA-B300}
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  router:
+    gateway: {refs: [{name: ai-gateway, namespace: ai-demo}]}
+    route: {http: {refs: [{name: vllm-glm-5-3}]}}
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: vllm-deepseek-v4-pro
+  namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: big}
+spec:
+  baseRefs: [{name: vllm-production}]
+  model:
+    uri: hf://deepseek-ai/DeepSeek-V4-Pro
+    name: deepseek-v4-pro
+  storageInitializer: {enabled: true}
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        args: [--served-model-name, deepseek-v4-pro, --port, "8000", --max-model-len, "163840", --tensor-parallel-size, "8", --gpu-memory-utilization, "0.90"]
+        resources:
+          requests: {cpu: "32", memory: 192Gi, nvidia.com/gpu: "8"}
+          limits: {cpu: "64", memory: 384Gi, nvidia.com/gpu: "8"}
+    nodeSelector: {nvidia.com/gpu.product: NVIDIA-B300}
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  router:
+    gateway: {refs: [{name: ai-gateway, namespace: ai-demo}]}
+    route: {http: {refs: [{name: vllm-deepseek-v4-pro}]}}
+---
+# Medium tier. Long context at a lower cost per token than the big tier, on
+# H200. A `big` or `medium` token may reach it; `small` may not.
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: vllm-deepseek-v4-flash
+  namespace: ai-demo
+  labels: {ai-gateway.openai/model-tier: medium}
+spec:
+  baseRefs: [{name: vllm-production}]
+  model:
+    uri: hf://deepseek-ai/DeepSeek-V4-Flash
+    name: deepseek-v4-flash
+  storageInitializer: {enabled: true}
+  replicas: 1
+  template:
+    containers:
+      - name: main
+        args: [--served-model-name, deepseek-v4-flash, --port, "8000", --max-model-len, "131072", --tensor-parallel-size, "4", --gpu-memory-utilization, "0.90"]
+        resources:
+          requests: {cpu: "16", memory: 96Gi, nvidia.com/gpu: "4"}
+          limits: {cpu: "32", memory: 192Gi, nvidia.com/gpu: "4"}
+    nodeSelector: {nvidia.com/gpu.product: NVIDIA-H200}
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  router:
+    gateway: {refs: [{name: ai-gateway, namespace: ai-demo}]}
+    route: {http: {refs: [{name: vllm-deepseek-v4-flash}]}}
 ---
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService

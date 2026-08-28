@@ -730,15 +730,54 @@ per-model tier rules in that file -- they cannot be what holds the ceiling on
 
 Each gateway-local `deploy/kserve/production/` directory contains the same
 replacement for the combined fixture: one independently scalable vLLM
-`LLMInferenceService` per model and task. The top-level `kserve/production/`
-keeps the same package available to arbitrary external GPU contexts.
+`LLMInferenceService` per model and task, covering all three tiers. The
+top-level `kserve/production/` keeps the same package available to arbitrary
+external GPU contexts.
 
 | Public endpoint | Hugging Face model | Served name | Tier | API | Reference GPU |
 |---|---|---|---|---|---|
+| `/v1/chat/completions` | `moonshotai/Kimi-K3` | `kimi-k3` | Big | Chat | 8x B300 |
+| `/v1/chat/completions` | `zai-org/GLM-5.3` | `glm-5.3` | Big | Chat | 8x B300 |
+| `/v1/chat/completions` | `deepseek-ai/DeepSeek-V4-Pro` | `deepseek-v4-pro` | Big | Chat | 8x B300 |
+| `/v1/chat/completions` | `deepseek-ai/DeepSeek-V4-Flash` | `deepseek-v4-flash` | Medium | Chat | 4x H200 |
 | `/v1/chat/completions`, `/v1/models` | `Qwen/Qwen3.8-27B` | `qwen3.8-27b` (`auto` alias) | Small | Chat and models | H100 |
 | `/v1/embeddings` | `Qwen/Qwen3-Embedding-8B` | `qwen3-embedding-8b` | Small | Embeddings | H100 |
 | `/rerank`, `/v1/rerank`, `/v2/rerank` | `BAAI/bge-reranker-v2-m3` | `bge-reranker-v2-m3` | Small | Rerank | L40S |
 | `/v1/audio/transcriptions` | `openai/whisper-large-v3` | `whisper-large-v3` | Small | Transcription | L40S |
+
+Five chat services share one path, so production routes `body.model` the same
+way the fixture does: BBR copies it to `X-Gateway-Model-Name` and each service's
+`HTTPRoute` matches on that header. The unheadered rule on `vllm-chat` is the
+fallback, which is also what serves the `auto` alias -- `auto` names no model
+the ladder governs, so it can never reach a tier the caller lacks. On the three
+repository-owned contexts BBR arrives with `make kserve`; the external bundle
+ships its `Deployment` and leaves the ext_proc attachment to that context, and
+the deploy script refuses to install without it.
+
+The tier ceiling is attached per route rather than per header value: each
+`HTTPRoute` carries the policy for its own tier, so a forged
+`X-Gateway-Model-Name` can only move a caller onto a different route, whose
+policy then applies unchanged. Big routes admit `big`, the medium route admits
+`big` or `medium`, and the small routes admit any of the three. BBR overwrites
+the header on every chat rule in any case.
+
+The fixture only ever proved header precedence *within* one `HTTPRoute`, so
+this topology was measured on all three stacks against the mock pools: two
+routes on one hostname, same exact path, one selecting on the model header.
+
+| | Envoy | agentgateway | Kuadrant |
+|---|---|---|---|
+| `body.model` names the headered route's model | b300 pool | b300 pool | b300 pool |
+| `body.model` names another model | fallback | fallback | fallback |
+| Forged header, body disagrees | BBR overwrites; fallback | BBR overwrites; fallback | BBR overwrites; fallback |
+
+Kuadrant needs the per-route `EnvoyFilter` this profile adds: removing it, a
+request naming the big model reached the shared CPU fixture instead of B300,
+and a forged header selected the pool unopposed. The tier ceiling still held
+there -- a `small` token forging the big model's header got 403 from the big
+route's own `AuthPolicy`, with BBR not running at all. Routing and
+authorization read different inputs here, so unlike the fixture's
+header-value-based rules they do not fail open together.
 
 The shared runtime config uses the official pinned
 [`vllm/vllm-openai:v0.27.0` image](https://docs.vllm.ai/en/v0.27.0/deployment/docker/),
@@ -765,8 +804,20 @@ make vllm-production-down VLLM_CONTEXT=my-gpu-context
 ```
 
 The deploy script fails before mutation if no node advertises allocatable
-`nvidia.com/gpu`. GPU labels, model sizes, credentials, storage, and replica
-counts are reference defaults and should be overlaid for the target cluster.
+`nvidia.com/gpu`, and on the three repository-owned contexts also if the
+body-based router is not running -- not merely absent. A Deployment scaled to
+zero still satisfies `kubectl get`, `rollout status`, and
+`wait --for=condition=Available`, all three of which report success because a
+Deployment with `spec.replicas` 0 is trivially available; only the replica
+count separates a running router from a stopped one. GPU
+labels, model sizes, credentials, storage, and replica counts are reference
+defaults and should be overlaid for the target cluster; the big tier as shipped
+asks for eight B300 per service.
+
+`VLLM_TOKEN` must carry a `big` tier claim for `make vllm-validate` to reach
+every row. The check asserts each model answers as itself, because every way
+this arrangement can fail -- BBR missing, a route without its header match, two
+rules tied -- still returns 200 from the small-tier service.
 
 ## Gateway policy test layer
 
@@ -1188,7 +1239,7 @@ Each `<gateway>/deploy/` directory has the same component-level shape:
 | `kserve/base/` | CPU presets, shared route, base `LLMInferenceService`, and provider-specific Kustomization |
 | `kserve/pools/` | Four accelerator fixtures, shared 12-model route, and provider-specific TLS resources |
 | `kserve/gpu/` | Optional placement and device requests for the mock pools |
-| `kserve/production/` | Pinned vLLM runtime and four real task-specific services |
+| `kserve/production/` | Pinned vLLM runtime and eight real services across all three tiers |
 | `llm-d/` | BBR workload and that gateway's ext_proc/TLS attachment |
 | `native-routing/` | Optional body-model routing in the gateway's own API, on `native.local`, beside the BBR path (Envoy and agentgateway only) |
 | `keycloak/` | Identity workload, route, and gateway-specific Kustomization |

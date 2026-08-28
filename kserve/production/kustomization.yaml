@@ -4,3 +4,10 @@ resources:
   - vllm-config.yaml
   - routes.yaml
   - models.yaml
+  # Five chat services share /v1/chat/completions and are separated by the
+  # X-Gateway-Model-Name header, so this bundle carries the body-based router
+  # itself. The three gateway profiles install the same Deployment from their
+  # own llm-d/ tree and attach it with a gateway-native ext_proc policy; an
+  # arbitrary external context owns that attachment, exactly as it owns its
+  # authentication integration.
+  - body-based-router.yaml
