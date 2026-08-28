@@ -1388,7 +1388,7 @@ footer {
       </tr>
     </thead>
     <tbody>
-      <tr><td>Models routed to their pool</td><td><span class="x">8 of 12</span></td><td><span class="good">12 of 12</span></td><td>no body-aware API</td></tr>
+      <tr><td>Models routed to their pool</td><td><span class="x">8 of 12</span></td><td><span class="x">5 of 12, none of them native</span></td><td>no body-aware API</td></tr>
       <tr><td>Forged model header</td><td>body wins, header ignored</td><td>no client-visible header exists</td><td>&mdash;</td></tr>
       <tr><td>Tier ceiling, both rungs</td><td><span class="good">held</span></td><td><span class="good">held</span></td><td>&mdash;</td></tr>
       <tr><td>Catalog / <code>auto</code> / speech</td><td>200 / <span class="x">404</span> / 200</td><td>200 / 200 / 200</td><td>&mdash;</td></tr>
@@ -1413,9 +1413,11 @@ footer {
 
   <p>Removing it naively on Envoy is worse than not working. With BBR&rsquo;s <code>ext_proc</code> attachments deleted, every request still returned HTTP 200 &mdash; from the shared CPU fixture &mdash; and a medium-tier token was served <code>kimi-k3</code>. The <code>SecurityPolicy</code> gates on the same header the route matches, so routing and authorization failed open together and silently. That is the reason the overlay is additive: not caution, but the measured cost of the alternative.</p>
 
-  <p>agentgateway comes closest. On its own listener the native path is a complete functional replacement &mdash; twelve of twelve models, <code>auto</code>, the catalog, speech, the tier ceiling on the model resource rather than on a forgeable header, and rate limiting all follow a caller who switches hostname. What is not replaceable there is making it the <em>default</em> path, which is a listener-binding limitation rather than a missing capability.</p>
+  <p>agentgateway&rsquo;s half of this table read <span class="mono">12 of 12</span> until a review pointed at how it was measured. The sweep ran with the body-based router still up, and only one chat model was re-sent with it stopped &mdash; so successes BBR had produced were being reported as native ones. Re-measured with the whole sweep running while BBR is stopped it reads five, and none of the five come from <code>AgentgatewayModel</code>: deleting all twelve models changes nothing, suppressing the semantic router&rsquo;s header transformation drops every model to the shared fixture with the models still installed, the resources carry no <code>status</code>, and the data plane&rsquo;s access log never attributes a route to one. The five are the semantic router writing the routing header itself; the seven task models were BBR all along.</p>
 
-  <p>One method note, since it nearly went the other way. The row above read <span class="mono">4/4 pools</span> for months. It sampled one model per accelerator class, and the four it happened to pick were the four that worked; a third of the catalog did not route natively on Envoy at all. The probe now sends all twelve and reports models rather than pools.</p>
+  <p>So Envoy&rsquo;s is the native path that genuinely routes, at eight of twelve, and agentgateway&rsquo;s does not route at all in this deployment. Whether that is an error in these manifests or a limitation of v1.4.1 is not established here.</p>
+
+  <p>One method note, because this row has now been wrong twice in the same direction. It first read <span class="mono">4/4 pools</span>, sampling one model per accelerator class &mdash; and the four it picked were the four that worked, while a third of the catalog did not route natively on Envoy at all. Corrected to twelve models, it then counted them in the wrong state. Both errors flattered the native path, which is the direction a row written by the person who built the thing tends to fail in. The count now comes from the stopped-state sweep alone.</p>
 </section>
 
 <footer>

@@ -332,11 +332,28 @@ Three things were worth deciding once it had run. Two now have answers:
    spend the same bucket the `request_limit` row measures, and a row that
    corrupts another row is worse than a row recorded by hand.
 
-   So agentgateway's native path is a complete functional replacement for BBR —
-   twelve of twelve models, `auto`, the catalog, speech, the tier ceiling, no
-   forgeable header, and rate limiting — on `native.local`. What is not
-   replaceable is making it the default path, and that is a listener-binding
-   limitation rather than a missing capability.
+   **That conclusion was wrong, and a review caught the reason.** The count was
+   taken with BBR running and then a single chat model was re-sent with it
+   stopped, so successes BBR had produced were being reported as native ones.
+   Re-measured with the whole sweep running while BBR is stopped, agentgateway
+   reads **5/12**, and none of the five come from `AgentgatewayModel`:
+
+   * deleting all twelve models changes nothing — chat still reaches b300 and
+     h100 with BBR stopped;
+   * suppressing the semantic router's header transformation, models still
+     installed, drops every model to the shared fixture;
+   * the resources carry no `status` at all, and the data plane's access log
+     never attributes a route to one.
+
+   So the five are the semantic router writing `x-gateway-model-name` itself,
+   and the seven task models were BBR all along. Whether that is a manifest
+   error here or a limitation of agentgateway v1.4.1 is not established. The
+   manifests ship because they are the reproduction, and the row now reports
+   what they actually do. The per-model tier rules in the same file cannot be
+   what holds the ceiling on `native.local` either, for the same reason.
+
+   Envoy's native path is the one that genuinely routes: 8/12 with BBR stopped,
+   the same four failures by hand and through the harness.
 
    So on all three stacks BBR still owns the default path. The overlay is a
    real capability demonstration on its own hostname, not a drop-in

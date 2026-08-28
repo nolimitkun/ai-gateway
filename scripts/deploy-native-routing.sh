@@ -67,7 +67,12 @@ MANIFESTS="$COMPONENT_ROOT/native-routing"
 # The overlay routes to the accelerator pools by name. Without them every rule
 # would reference an InferencePool that does not exist, and the failure would
 # surface as a 500 at request time rather than at apply time.
-if ! kubectl --context "$SELECTED_CONTEXT" -n ai-demo \
+#
+# Installation only. Teardown must survive `make pools-down` having already
+# run: gating it on the pools too would leave the routes, models and the
+# native listener installed with dangling pool references, and no way to
+# remove them short of deleting the objects by hand.
+if ! $DELETE && ! kubectl --context "$SELECTED_CONTEXT" -n ai-demo \
   get llminferenceservice kserve-b300 >/dev/null 2>&1; then
   echo "accelerator pools are not installed; run 'make pools CLUSTER=<name>' first" >&2
   exit 2

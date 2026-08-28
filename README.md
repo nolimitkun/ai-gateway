@@ -88,7 +88,7 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-28 00:29 (30 requests) | 2026-08-28 09:55 (30 requests) | 2026-08-28 09:51 (30 requests) |
+| Last isolated comparison (UTC) | 2026-08-28 00:29 (30 requests) | 2026-08-28 10:53 (30 requests) | 2026-08-28 10:49 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
@@ -98,19 +98,19 @@ zero-delay Python runtime, not production performance benchmarks.
 | Workload replicas | 2/2 | 2/2 | 2/2 |
 | KServe-owned Deployments, Services, and Pool | 5 | 5 | 5 |
 | Latest routing sample | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods | 30/30 HTTP 200, 2 pods |
-| Streaming usage chunk | Yes | No | Yes |
-| Streaming `[DONE]` termination | Yes | No | Yes |
+| Streaming usage chunk | Yes | Yes | Yes |
+| Streaming `[DONE]` termination | Yes | Yes | Yes |
 | Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
 | Tiered chat models | big/medium/small | big/medium/small | big/medium/small |
 | Embeddings API | Yes | Yes | Yes |
-| RAG embedding models | No | No | Yes |
+| RAG embedding models | No | Yes | Yes |
 | Embedding dimension validation | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected |
-| Reranking API | Yes | No | Yes |
+| Reranking API | Yes | Yes | Yes |
 | Speech-to-text API | Yes | Yes | Yes |
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
-| Speech capability rejection | ASR-only diarization rejected | No | ASR-only diarization rejected |
+| Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
 | Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
-| Local chat p50 | 31 ms | 69 ms | 52 ms |
+| Local chat p50 | 31 ms | 47 ms | 52 ms |
 | Policy objects reporting ready | 3/3 | 3/3 | 6/6 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
 | Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
@@ -118,7 +118,7 @@ zero-delay Python runtime, not production performance benchmarks.
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
 | Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | b300 / h200 / h100 |
 | Decision headers returned to the client | big / medium / small | big / medium / small | big / medium / small |
-| Auto-routed chat p50 | 86 ms | 52 ms | 17 ms |
+| Auto-routed chat p50 | 86 ms | 38 ms | 15 ms |
 | Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 500 / auto 500 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
@@ -130,11 +130,11 @@ zero-delay Python runtime, not production performance benchmarks.
 | Tenant metadata cannot bypass tier | Denied by small tier (HTTP 403) | Denied by small tier (HTTP 403) | Denied by small tier (HTTP 403) |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
 | Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
-| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6; shared bucket |
+| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 1 of 6; shared bucket |
 | Nested org/team buckets (org 5, team 3) | unenforced: team A no 429 in 4; team B no 429 in 4; other org no 429 in 3 | nested: team A 429 on request 4 of 4; team B 429 on request 2 of 4; other org no 429 in 3 | Needs an external rate limit service |
 | Forged tenant header | HONOURED -- bucket escaped (HTTP 200) | Ignored (HTTP 429) | Not applicable without tenant buckets |
 | Tenant bucket across both routes | Single inference route | SEPARATE bucket per route -- ceiling doubled | Single inference route |
-| Body-model routing without BBR | No body-aware routing API (raw EnvoyFilter drives BBR) | 8/12 models; missed qwen3-embedding-8b, e5-mistral-7b-instruct, bge-reranker-v2-m3, jina-reranker-v2-base-multilingual | 12/12 models, still routed with BBR scaled to 0 |
+| Body-model routing without BBR | No body-aware routing API (raw EnvoyFilter drives BBR) | 8/12 models with BBR scaled to 0; missed qwen3-embedding-8b, e5-mistral-7b-instruct, bge-reranker-v2-m3, jina-reranker-v2-base-multilingual | 5/12 models with BBR scaled to 0; missed qwen3-embedding-8b, e5-mistral-7b-instruct, bge-m3, jina-embeddings-v3, nomic-embed-text-v2-moe, bge-reranker-v2-m3, jina-reranker-v2-base-multilingual |
 | Native path: forged model header | No body-aware routing API (raw EnvoyFilter drives BBR) | Body wins; forged header ignored | No client-visible model header |
 | Native path: tier ceiling | No body-aware routing API (raw EnvoyFilter drives BBR) | Held (big: medium 403 / big 200; medium: medium 200) | Held (big: medium 403 / big 200; medium: medium 200) |
 | Native path: catalog / auto / speech | No body-aware routing API (raw EnvoyFilter drives BBR) | catalog 200 / auto 404 / speech 200 | catalog 200 / auto 200 / speech 200 |
@@ -668,10 +668,15 @@ is recorded in `docs/open-questions.md` rather than as a row, because probing
 it would spend the bucket the `request_limit` row measures. The mechanism
 behind the catalog answering is not established; only that it does.
 
-`Body-model routing without BBR` counts models, not pools. An earlier version
-sampled one model per accelerator class and reported "4/4 pools" while a third
-of the catalog did not work natively on Envoy at all, because the four it
-happened to pick were the working ones.
+`Body-model routing without BBR` counts models, not pools, and every one of
+them is sent while the body-based router is stopped. Two earlier versions of
+this row were wrong in the same direction. The first sampled one model per
+accelerator class and reported "4/4 pools" while a third of the catalog did not
+route natively on Envoy at all -- the four it picked were the working ones. The
+second counted all twelve but counted them with BBR still running, then
+re-sent a single chat model with it stopped, so successes BBR had produced were
+reported as native ones. The count now comes from the stopped-state sweep
+alone.
 
 The interesting difference is authorization, not routing. The tier ceiling
 reads the header BBR writes, so removing BBR removes what the rule tests
@@ -706,12 +711,20 @@ inert: with its `ext_proc` attachments deleted every request still returned
 because routing and authorization gate on the same header and failed open
 together.
 
-agentgateway comes closest. On its own listener the native path is a complete
-functional replacement -- twelve of twelve models, `auto`, the catalog, speech,
-the tier ceiling and rate limiting all follow. What is not replaceable there is
-making it the default path, and that is a listener-binding limitation rather
-than a missing capability. `docs/open-questions.md` records each dead end with
-what was measured.
+agentgateway's `AgentgatewayModel` routing does not take effect at all, which
+only became visible once the count was taken with BBR stopped. It reads 5/12,
+and none of those five come from the models: deleting all twelve changes
+nothing, and suppressing the semantic router's header transformation drops
+every model to the shared fixture with the models still installed. The
+resources carry no `status`, and the data plane never attributes a route to
+one. So the five are the semantic router writing `x-gateway-model-name`
+itself, and the seven task models were BBR all along. Whether that is a
+manifest error here or a limitation of agentgateway v1.4.1 is not established;
+the manifests ship because they are the reproduction. The same follows for the
+per-model tier rules in that file -- they cannot be what holds the ceiling on
+`native.local`, since nothing in the file takes effect.
+
+`docs/open-questions.md` records each dead end with what was measured.
 
 ### Production vLLM
 

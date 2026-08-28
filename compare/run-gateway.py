@@ -381,21 +381,14 @@ def native_routing_present(cfg: dict, cluster: str) -> bool:
     return bool(object_name) and bool(kube_json(cfg, "ai-demo", object_name))
 
 
-def probe_native_routing(cfg: dict, access_token: str) -> str:
-    """Do the model rules reach their pools with the body-based router gone?
-
-    Reaching the right pool is only half the claim: BBR is still running on
-    the other hostname, and a shared filter chain would let it write the
-    routing header for this request too. So the processor is scaled to zero
-    and one request repeated. A pool reached with no BBR pod alive cannot have
-    been reached through BBR.
-    """
+def native_sample_sweep(cfg: dict, access_token: str) -> list[bool]:
+    """Send every model in NATIVE_POOL_SAMPLES and say which reached its pool."""
     reached = []
     for path, sample, accelerator in NATIVE_POOL_SAMPLES:
         # Twelve models is enough traffic that a single cold pool shows up as a
         # miss. One retry separates that from a model the path genuinely cannot
         # serve, which is what this row exists to report.
-        for attempt in range(2):
+        for _ in range(2):
             code, body, _ = json_call(
                 cfg, path, access_token, native_payload(path, sample), {"host": NATIVE_HOST},
             )
@@ -403,15 +396,29 @@ def probe_native_routing(cfg: dict, access_token: str) -> str:
             if ok:
                 break
         reached.append(ok)
-    if not all(reached):
-        missed = ", ".join(
-            sample["model"] for (_, sample, _), ok in zip(NATIVE_POOL_SAMPLES, reached) if not ok
-        )
-        return f"{sum(reached)}/{len(reached)} models; missed {missed}"
+    return reached
 
+
+def probe_native_routing(cfg: dict, access_token: str) -> str:
+    """Do the model rules reach their pools with the body-based router gone?
+
+    The whole sweep runs with BBR scaled to zero, and the count comes from
+    those requests. Measuring with BBR up and then re-sending a single model
+    with it down would let the row say "twelve models, still routed with BBR
+    scaled to 0" on the strength of one chat request: embeddings and rerank
+    reach their pools through different route and filter attachments, and
+    nothing about them can be inferred from kimi-k3. It would also skip the
+    scale-down entirely whenever any model failed, which is exactly the case
+    -- Envoy's -- where what happens without BBR is the thing in question.
+
+    A pool reached with no BBR pod alive cannot have been reached through BBR,
+    which is the only claim this row makes.
+    """
     deployment = kube_json(cfg, "ai-demo", "deployment/body-based-router")
     if not deployment:
+        reached = native_sample_sweep(cfg, access_token)
         return f"{sum(reached)}/{len(reached)} models; BBR already absent"
+
     replicas = deployment.get("spec", {}).get("replicas", 1)
     kubectl(cfg, "-n", "ai-demo", "scale", "deployment/body-based-router", "--replicas=0")
     deadline = time.monotonic() + 180
@@ -425,11 +432,7 @@ def probe_native_routing(cfg: dict, access_token: str) -> str:
     else:
         raise RuntimeError("body-based-router pod did not terminate for the native probe")
     try:
-        path, sample, accelerator = NATIVE_POOL_SAMPLES[0]
-        code, body, _ = json_call(
-            cfg, path, access_token, native_payload(path, sample), {"host": NATIVE_HOST},
-        )
-        without_bbr = code == 200 and body.get("mock_accelerator") == accelerator
+        reached = native_sample_sweep(cfg, access_token)
     finally:
         kubectl(
             cfg, "-n", "ai-demo", "scale", "deployment/body-based-router",
@@ -439,12 +442,13 @@ def probe_native_routing(cfg: dict, access_token: str) -> str:
             cfg, "-n", "ai-demo", "rollout", "status", "deployment/body-based-router",
             "--timeout=420s",
         )
-    return (
-        f"{sum(reached)}/{len(reached)} models, still routed with BBR scaled to 0"
-        if without_bbr
-        else f"{sum(reached)}/{len(reached)} models, but not with BBR scaled to 0 "
-             f"(HTTP {code}, pool {body.get('mock_accelerator')})"
+
+    if all(reached):
+        return f"{sum(reached)}/{len(reached)} models with BBR scaled to 0"
+    missed = ", ".join(
+        sample["model"] for (_, sample, _), ok in zip(NATIVE_POOL_SAMPLES, reached) if not ok
     )
+    return f"{sum(reached)}/{len(reached)} models with BBR scaled to 0; missed {missed}"
 
 
 def probe_native_spoof(cfg: dict, cluster: str, access_token: str) -> str:

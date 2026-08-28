@@ -21,13 +21,16 @@ one place; `make validate` keeps those copies synchronized.
 The base and pool manifests are byte-equivalent to the former shared KServe
 resources; only their repository paths changed.
 
-`native-routing/` is additive and never replaces `llm-d/`. `AgentgatewayModel`
-matches the model in the request itself, so the twelve mappings need no routing
-header at all, and the tier ceiling sits on the model resource rather than on a
-header a client could forge. Measured on its own listener it is a complete
-replacement for BBR -- twelve of twelve models, `auto`, the catalog, speech,
-the tier ceiling and rate limiting all follow a caller who switches hostname.
-What does not work is making it the default path: the models 404 on the `http`
-listener however they are attached, and `traffic.transformation` cannot read
-the request body to write the routing header itself. See
-`docs/open-questions.md`.
+`native-routing/` is additive and never replaces `llm-d/`. On paper
+`AgentgatewayModel` matches the model in the request itself, so the twelve
+mappings would need no routing header and the tier ceiling could sit on the
+model resource rather than on a header a client could forge.
+
+Measured, none of it takes effect. With the body-based router stopped the
+comparison reads 5/12, and the five are the semantic router writing
+`x-gateway-model-name`, not the models: deleting all twelve changes nothing,
+suppressing that transformation drops every model to the shared fixture with
+the models still installed, the resources carry no `status`, and the data plane
+never attributes a route to one. Whether that is an error in these manifests or
+a limitation of agentgateway v1.4.1 is not established -- they ship because
+they are the reproduction. See `docs/open-questions.md`.
