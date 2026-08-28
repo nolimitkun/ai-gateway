@@ -1,5 +1,11 @@
-# Every model in this production profile is small-tier. JWT authentication and
-# the same tier-ceiling claim used by the shared fixture cover all four routes.
+# Production carries all three tiers, so the ceiling is attached per route
+# rather than once for the whole profile. JWT authentication covers every
+# route; the authorization policies below then differ only in which tier
+# claims they admit. Nothing here reads org, team, group, or plan.
+#
+# BBR needs no production-specific attachment on this stack: its ext_proc is a
+# PreRouting policy on the Gateway itself, conditioned on request.path, so
+# /v1/chat/completions is already covered whichever route serves it.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
@@ -8,6 +14,10 @@ metadata:
 spec:
   targetRefs:
     - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-chat}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-kimi-k3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-glm-5-3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-pro}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-flash}
     - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-embedding}
     - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-rerank}
     - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-transcription}
@@ -42,3 +52,35 @@ spec:
       policy:
         matchExpressions:
           - 'has(jwt.tier) && jwt.tier in ["big", "medium", "small"]'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: vllm-medium-tier
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-flash}
+  traffic:
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - 'has(jwt.tier) && jwt.tier in ["big", "medium"]'
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: vllm-big-tier
+  namespace: ai-demo
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-kimi-k3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-glm-5-3}
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: vllm-deepseek-v4-pro}
+  traffic:
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - 'has(jwt.tier) && jwt.tier == "big"'

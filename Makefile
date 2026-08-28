@@ -184,11 +184,17 @@ vllm-production-down: ## remove production vLLM services from VLLM_CONTEXT
 	@test -n "$(VLLM_CONTEXT)" || { echo 'set VLLM_CONTEXT to a kubectl context' >&2; exit 2; }
 	bash scripts/deploy-vllm-production.sh "$(VLLM_CONTEXT)" --delete
 
-vllm-validate: ## validate production vLLM APIs (set VLLM_BASE_URL)
+# The tier rows need a token whose tier claim is big; a lower one is refused by
+# the route policy and reported as the 403 it is.
+vllm-validate: ## validate production vLLM APIs (set VLLM_BASE_URL; VLLM_TOKEN must be big tier)
 	@test -n "$(VLLM_BASE_URL)" || { echo 'set VLLM_BASE_URL to the Gateway URL' >&2; exit 2; }
 	$(PYTHON) scripts/validate-vllm-contract.py --base-url "$(VLLM_BASE_URL)" \
 	  --check-auto $(if $(VLLM_TOKEN),--token "$(VLLM_TOKEN)",) \
 	  --chat-model qwen3.8-27b \
+	  --tier-chat-model kimi-k3 \
+	  --tier-chat-model glm-5.3 \
+	  --tier-chat-model deepseek-v4-pro \
+	  --tier-chat-model deepseek-v4-flash \
 	  --embedding-model qwen3-embedding-8b \
 	  --rerank-model bge-reranker-v2-m3 \
 	  --transcription-model whisper-large-v3

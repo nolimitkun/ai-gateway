@@ -30,9 +30,39 @@ TRANSCRIPTION_PATH = "/v1/audio/transcriptions"
 TIER_LABEL = "ai-gateway.openai/model-tier"
 PRODUCTION_TIERS = {
     "vllm-chat": "small",
+    "vllm-kimi-k3": "big",
+    "vllm-glm-5-3": "big",
+    "vllm-deepseek-v4-pro": "big",
+    "vllm-deepseek-v4-flash": "medium",
     "vllm-embedding": "small",
     "vllm-rerank": "small",
     "vllm-transcription": "small",
+}
+PRODUCTION_MODELS = {
+    "vllm-chat": "qwen3.8-27b",
+    "vllm-kimi-k3": "kimi-k3",
+    "vllm-glm-5-3": "glm-5.3",
+    "vllm-deepseek-v4-pro": "deepseek-v4-pro",
+    "vllm-deepseek-v4-flash": "deepseek-v4-flash",
+    "vllm-embedding": "qwen3-embedding-8b",
+    "vllm-rerank": "bge-reranker-v2-m3",
+    "vllm-transcription": "whisper-large-v3",
+}
+# The chat services that share /v1/chat/completions and are separated only by
+# the header BBR writes. Each needs its rule covered by the stack's ext_proc
+# attachment, including the unheadered fallback.
+PRODUCTION_CHAT_SECTIONS = {
+    "vllm-chat": "vllm-chat",
+    "vllm-kimi-k3": "vllm-chat-kimi-k3",
+    "vllm-glm-5-3": "vllm-chat-glm-5-3",
+    "vllm-deepseek-v4-pro": "vllm-chat-deepseek-v4-pro",
+    "vllm-deepseek-v4-flash": "vllm-chat-deepseek-v4-flash",
+}
+# What a route's own policy must admit, given its tier label.
+TIER_CEILING = {
+    "big": {"big"},
+    "medium": {"big", "medium"},
+    "small": {"big", "medium", "small"},
 }
 EXPECTED_TIER_MODELS = {
     "big": {"kimi-k3", "glm-5.3", "deepseek-v4-pro"},
@@ -324,8 +354,9 @@ def main() -> int:
     if len(defaults) != 1:
         problems.append(f"gateway auto defaults differ: {sorted(defaults)}")
 
-    # Fixed-tier production routes and services must agree, support the auto
-    # alias on the single chat model, and carry native policy coverage.
+    # Production serves all three tiers. Each route's label, its service's
+    # label, the model it serves, the header that selects it, and the policy
+    # attached to it must all agree, and `auto` must stay on the small model.
     all_routes = set(PRODUCTION_TIERS)
     for stack in STACKS:
         production = DEPLOY[stack] / "kserve" / "production"
@@ -351,21 +382,51 @@ def main() -> int:
             served = []
         if served[:2] != ["qwen3.8-27b", "auto"]:
             problems.append(f"{stack} production chat does not map auto to qwen3.8-27b")
-        served_by_route = {}
-        for document in model_docs:
-            model = document["spec"]["model"]["name"]
-            served_by_route[document["metadata"]["name"]] = model
-        expected_production_models = {
-            "vllm-chat": "qwen3.8-27b",
-            "vllm-embedding": "qwen3-embedding-8b",
-            "vllm-rerank": "bge-reranker-v2-m3",
-            "vllm-transcription": "whisper-large-v3",
+        served_by_route = {
+            document["metadata"]["name"]: document["spec"]["model"]["name"]
+            for document in model_docs
         }
-        if served_by_route != expected_production_models:
+        if served_by_route != PRODUCTION_MODELS:
             problems.append(
                 f"{stack} production served models are {served_by_route}, expected "
-                f"{expected_production_models}"
+                f"{PRODUCTION_MODELS}"
             )
+
+        # Every service's tier label must be the tier its model actually has.
+        mislabelled = {
+            route: (served_by_route.get(route), tier)
+            for route, tier in PRODUCTION_TIERS.items()
+            if by_name.get(served_by_route.get(route), {}).get("tier") != tier
+        }
+        if mislabelled:
+            problems.append(
+                f"{stack} production labels disagree with the catalog tier: {mislabelled}"
+            )
+
+        # The five chat services share /v1/chat/completions. Every one but the
+        # unheadered fallback must select on the header BBR writes, matching the
+        # model it serves -- otherwise two routes tie and one silently wins.
+        rules_by_route = {
+            doc["metadata"]["name"]: doc["spec"]["rules"] for doc in route_docs
+        }
+        for route, section in PRODUCTION_CHAT_SECTIONS.items():
+            rule = next(
+                (item for item in rules_by_route.get(route, []) if item.get("name") == section),
+                None,
+            )
+            if rule is None:
+                problems.append(f"{stack} production route '{route}' has no '{section}' section")
+                continue
+            headers = {
+                header["name"]: header["value"]
+                for match in rule["matches"]
+                for header in match.get("headers", [])
+            }
+            expected = {} if route == "vllm-chat" else {"x-gateway-model-name": PRODUCTION_MODELS[route]}
+            if headers != expected:
+                problems.append(
+                    f"{stack} production section '{section}' matches {headers}, expected {expected}"
+                )
         kustomization = yaml.safe_load((production / "kustomization.yaml").read_text())
         if "policies.yaml" not in kustomization.get("resources", []):
             problems.append(f"{stack} production kustomization omits policies.yaml")
@@ -390,41 +451,142 @@ def main() -> int:
                 f"{sorted(unprovisioned)}; provisioned: {sorted(provisioned)}"
             )
 
+    def expected_ceiling(routes: set[str]) -> set[str]:
+        """The tiers a policy covering exactly these routes must admit."""
+        return set().union(*(TIER_CEILING[PRODUCTION_TIERS[route]] for route in routes))
+
+    def routes_at(tier: str) -> set[str]:
+        return {route for route, value in PRODUCTION_TIERS.items() if value == tier}
+
+    # Each stack spells the ceiling differently, but all three must end up with
+    # exactly one policy per tier, covering exactly that tier's routes and
+    # admitting exactly the claims that tier permits. A policy that covered two
+    # tiers at once would silently grant the lower one access to the higher.
     agent_production = documents(
         DEPLOY["agentgateway"] / "kserve" / "production" / "policies.yaml"
     )
-    agent_by_name = {doc["metadata"]["name"]: target_names(doc) for doc in agent_production}
-    if agent_by_name.get("vllm-jwt") != all_routes or agent_by_name.get("vllm-small-tier") != all_routes:
-        problems.append("agentgateway production JWT/tier policies do not cover every route")
-    if "vllm-big-tier" in agent_by_name:
-        problems.append("agentgateway production has a big-tier policy but every route is small")
+    agent_by_name = {doc["metadata"]["name"]: doc for doc in agent_production}
+    if target_names(agent_by_name.get("vllm-jwt", {})) != all_routes:
+        problems.append("agentgateway production JWT policy does not cover every route")
+    for tier in sorted(TIERS):
+        policy = agent_by_name.get(f"vllm-{tier}-tier")
+        if policy is None:
+            problems.append(f"agentgateway production has no vllm-{tier}-tier policy")
+            continue
+        if target_names(policy) != routes_at(tier):
+            problems.append(
+                f"agentgateway production vllm-{tier}-tier covers {sorted(target_names(policy))}, "
+                f"expected {sorted(routes_at(tier))}"
+            )
+        expression = policy["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"][0]
+        admitted = {value for value in re.findall(r'"([^"]+)"', expression) if value in TIERS}
+        if admitted != TIER_CEILING[tier]:
+            problems.append(
+                f"agentgateway production vllm-{tier}-tier admits {sorted(admitted)}, "
+                f"expected {sorted(TIER_CEILING[tier])}"
+            )
 
     envoy_production = documents(
         DEPLOY["envoy-ai-gateway"] / "kserve" / "production" / "policies.yaml"
     )
-    envoy_by_name = {doc["metadata"]["name"]: target_names(doc) for doc in envoy_production}
-    if set().union(*envoy_by_name.values()) != all_routes:
-        problems.append("Envoy production SecurityPolicies do not cover every route")
-    if "vllm-big-tier" in envoy_by_name:
-        problems.append("Envoy production has a big-tier policy but every route is small")
+    envoy_security = [doc for doc in envoy_production if doc["kind"] == "SecurityPolicy"]
+    covered: list[str] = []
+    for document in envoy_security:
+        routes = target_names(document)
+        covered.extend(routes)
+        rules = document["spec"]["authorization"]["rules"]
+        admitted = {
+            value
+            for rule in rules
+            for claim in rule["principal"]["jwt"]["claims"]
+            if claim["name"] == "tier"
+            for value in claim["values"]
+        }
+        if admitted != expected_ceiling(routes):
+            problems.append(
+                f"Envoy production '{document['metadata']['name']}' admits {sorted(admitted)} "
+                f"for {sorted(routes)}, expected {sorted(expected_ceiling(routes))}"
+            )
+    if sorted(covered) != sorted(all_routes):
+        problems.append(
+            f"Envoy production SecurityPolicies cover {sorted(covered)}, expected each of "
+            f"{sorted(all_routes)} exactly once"
+        )
+
+    # Envoy attaches BBR per route section; the mock's policy names
+    # HTTPRoute/kserve-mock only, so production carries its own.
+    envoy_extproc = next(
+        (doc for doc in envoy_production if doc["kind"] == "EnvoyExtensionPolicy"), None
+    )
+    if envoy_extproc is None:
+        problems.append("Envoy production has no ext_proc policy for the shared chat path")
+    else:
+        attached = {
+            (ref["name"], ref.get("sectionName"))
+            for ref in envoy_extproc["spec"]["targetRefs"]
+        }
+        if attached != set(PRODUCTION_CHAT_SECTIONS.items()):
+            problems.append(
+                f"Envoy production BBR attaches to {sorted(attached)}, expected "
+                f"{sorted(PRODUCTION_CHAT_SECTIONS.items())}"
+            )
 
     kuadrant_production = documents(
         DEPLOY["kuadrant"] / "kserve" / "production" / "policies.yaml"
     )
-    kuadrant_by_target = {next(iter(target_names(doc))): doc for doc in kuadrant_production}
+    kuadrant_auth = [doc for doc in kuadrant_production if doc["kind"] == "AuthPolicy"]
+    kuadrant_by_target = {next(iter(target_names(doc))): doc for doc in kuadrant_auth}
     if set(kuadrant_by_target) != all_routes:
         problems.append("Kuadrant production AuthPolicies do not cover every route")
     for route, document in kuadrant_by_target.items():
-        rules = document.get("spec", {}).get("rules", {}).get("authorization", {})
-        if "big-tier" in rules:
-            problems.append(f"Kuadrant small production route '{route}' has big-tier authorization")
+        rules = document["spec"]["rules"]["authorization"]
+        tier = PRODUCTION_TIERS[route]
+        if set(rules) != {f"{tier}-tier"}:
+            problems.append(
+                f"Kuadrant production route '{route}' is labelled {tier} but its rules are "
+                f"{sorted(rules)}"
+            )
+            continue
+        admitted = {
+            pattern["value"]
+            for pattern in rules[f"{tier}-tier"]["patternMatching"]["patterns"][0]["any"]
+        }
+        if admitted != TIER_CEILING[tier]:
+            problems.append(
+                f"Kuadrant production route '{route}' admits {sorted(admitted)}, expected "
+                f"{sorted(TIER_CEILING[tier])}"
+            )
+
+    # Istio disables BBR at the virtual host and re-enables it by Envoy route
+    # name. Production's sections are not in the fixture's list, so a missing
+    # filter here leaves every chat request on the unheadered fallback.
+    kuadrant_filter = next(
+        (doc for doc in kuadrant_production if doc["kind"] == "EnvoyFilter"), None
+    )
+    if kuadrant_filter is None:
+        problems.append("Kuadrant production has no EnvoyFilter enabling BBR on its chat sections")
+    else:
+        enabled = {
+            patch["match"]["routeConfiguration"]["vhost"]["route"]["name"]
+            for patch in kuadrant_filter["spec"]["configPatches"]
+            if patch["applyTo"] == "HTTP_ROUTE"
+        }
+        if enabled != set(PRODUCTION_CHAT_SECTIONS.values()):
+            problems.append(
+                f"Kuadrant production BBR is enabled on {sorted(enabled)}, expected "
+                f"{sorted(PRODUCTION_CHAT_SECTIONS.values())}"
+            )
 
     for problem in problems:
         print(problem, file=sys.stderr)
     print(
         f"{len(expected_big_json)} big models, 1 medium model, 11 small accelerator models, "
         f"auto default {next(iter(defaults), 'missing')}, {len(all_routes)} protected "
-        f"production routes across {len(STACKS)} gateways, {len(problems)} problems"
+        f"production routes ("
+        + ", ".join(
+            f"{len(routes_at(tier))} {tier}" for tier in ("big", "medium", "small")
+        )
+        + f") across {len(STACKS)} gateways, {len(problems)} problems"
     )
     return 1 if problems else 0
 

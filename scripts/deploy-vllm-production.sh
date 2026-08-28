@@ -28,19 +28,13 @@ case "$context" in
     select_context_components "$context"
     PRODUCTION_MANIFESTS="$COMPONENT_ROOT/kserve/production"
     REQUIRED_POLICY=securitypolicy/kserve-mock
-    OBSOLETE_PRODUCTION_POLICIES=(
-      securitypolicy/vllm-big-tier
-      securitypolicy/vllm-small-medium
-    )
+    OBSOLETE_PRODUCTION_POLICIES=(securitypolicy/vllm-small-medium)
     ;;
   kind-ai-gw-agent)
     select_context_components "$context"
     PRODUCTION_MANIFESTS="$COMPONENT_ROOT/kserve/production"
     REQUIRED_POLICY=agentgatewaypolicy/kserve-mock-jwt
-    OBSOLETE_PRODUCTION_POLICIES=(
-      agentgatewaypolicy/vllm-big-tier
-      agentgatewaypolicy/vllm-members
-    )
+    OBSOLETE_PRODUCTION_POLICIES=(agentgatewaypolicy/vllm-members)
     ;;
 esac
 
@@ -68,6 +62,24 @@ if [[ -n "$REQUIRED_POLICY" ]] &&
   exit 1
 fi
 
+# Five chat services now share /v1/chat/completions and are separated only by
+# the X-Gateway-Model-Name header. On the three repository-owned contexts BBR
+# arrives with 'make kserve'; the external bundle ships its Deployment itself.
+# This gate is about the workload being absent, which is not the same failure
+# as the attachment being absent. Measured on Envoy with the Deployment scaled
+# to zero and the attachment in place: every chat request returns 500, because
+# all three stacks attach BBR fail-closed. Measured on Kuadrant with the
+# attachment removed instead: requests succeed but land on the unheadered rule,
+# so the big and medium services hold their GPUs and never answer. The second
+# case is a manifest error, and scripts/validate-tier-contract.py checks each
+# stack's attachment offline; this gate catches the first.
+if [[ -n "$REQUIRED_POLICY" ]] &&
+   ! kubectl --context "$context" -n ai-demo get deployment body-based-router >/dev/null 2>&1; then
+  cluster=${context#kind-}
+  echo "production chat routing requires the body-based router; run 'make kserve CLUSTER=$cluster' first" >&2
+  exit 1
+fi
+
 for obsolete_policy in "${OBSOLETE_PRODUCTION_POLICIES[@]}"; do
   kubectl --context "$context" -n ai-demo delete "$obsolete_policy" --ignore-not-found
 done
@@ -85,4 +97,5 @@ done
 kubectl --context "$context" apply -k "$PRODUCTION_MANIFESTS"
 kubectl --context "$context" -n ai-demo wait llminferenceservice \
   --for=condition=Ready --timeout=30m \
-  vllm-chat vllm-embedding vllm-rerank vllm-transcription
+  vllm-chat vllm-kimi-k3 vllm-glm-5-3 vllm-deepseek-v4-pro \
+  vllm-deepseek-v4-flash vllm-embedding vllm-rerank vllm-transcription

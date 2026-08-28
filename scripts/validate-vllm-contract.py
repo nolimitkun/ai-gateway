@@ -26,6 +26,12 @@ def parse_args():
     parser.add_argument("--routing-header", help="header used by production task routes")
     parser.add_argument("--token", help="bearer token for a protected production route")
     parser.add_argument("--check-auto", action="store_true", help="verify the production chat auto alias")
+    parser.add_argument(
+        "--tier-chat-model",
+        action="append",
+        default=[],
+        help="chat model that must be answered by itself, not by the fallback; repeatable",
+    )
     for task, default in TASK_MODELS.items():
         parser.add_argument(f"--{task}-model", default=default)
         parser.add_argument(f"--{task}-route", default=task)
@@ -123,6 +129,27 @@ class Contract:
         )
         assert payload["model"] == self.args.chat_model, payload.get("model")
 
+    def tier_models(self):
+        """Each named chat model must answer as itself.
+
+        Production puts several chat services on /v1/chat/completions and tells
+        them apart by the header the body-based router writes from body.model.
+        Every failure mode of that arrangement -- BBR absent, a route missing
+        its header match, two rules tied -- still returns 200, just from the
+        wrong service. Only the answering model's name distinguishes them.
+        """
+        for model in self.args.tier_chat_model:
+            payload = self.json(
+                "chat",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "Reply with gateway."}],
+                    "max_tokens": 16,
+                },
+            )
+            assert payload["model"] == model, (model, payload.get("model"))
+
     def embeddings(self):
         payload = self.json(
             "embedding",
@@ -194,6 +221,8 @@ def main():
     ]
     if contract.args.check_auto:
         checks.insert(3, contract.auto)
+    if contract.args.tier_chat_model:
+        checks.insert(3, contract.tier_models)
     for check in checks:
         check()
         print(f"PASS {check.__name__}")
