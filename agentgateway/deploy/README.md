@@ -1,5 +1,10 @@
 # agentgateway cluster deployment
 
+Gateway charts and the root README live comparison were refreshed on
+2026-10-10. Detailed causal observations below remain August evidence; see
+the root README and `docs/local-gateway-tests-2026-10-10.md` for fresh probe
+results, current pins, and upgrade details.
+
 This directory is the complete Kubernetes YAML inventory for
 `ai-gw-agent`. It does not import manifests from either gateway tree. Shared
 components are intentionally repeated so this cluster can be inspected from
@@ -13,7 +18,7 @@ one place; `make validate` keeps those copies synchronized.
 | 4 | Optional B300/H200/H100/L40S pools and placement | `kserve/pools/`, `kserve/gpu/` | `make pools` or a GPU overlay |
 | 5 | BBR workload and native PreRouting TLS ext_proc policy | `llm-d/` | `make kserve` |
 | 6 | Keycloak workload and route | `keycloak/` | `make policies` |
-| 7 | JWT, authorization, local limit, quota, and CORS policies | `policies/` | `make policies` |
+| 7 | JWT, authorization, keyed local limits, org/team budgets, quota, and CORS policies | `policies/` | `make policies` |
 | 8 | Optional semantic-router workload, config, and route attachment | `semantic-router/` | `make semantic-router` |
 | 9 | Optional native body-model routing on `native.local`, beside the BBR path | `native-routing/` | `make native-routing` |
 | 10 | Optional real vLLM model services | `kserve/production/` | production deployment workflow |

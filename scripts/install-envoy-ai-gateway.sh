@@ -5,9 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [[ $# -eq 1 ]] || { echo "usage: $0 kind-ai-gw-envoy" >&2; exit 2; }
 CTX="$1"
 [[ "$CTX" == kind-ai-gw-envoy ]] || { echo "install-envoy-ai-gateway.sh only supports kind-ai-gw-envoy" >&2; exit 2; }
-EG_VERSION="${EG_VERSION:-v1.8.1}"
-AIEG_VERSION="${AIEG_VERSION:-v1.0.0}"
-GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
+EG_VERSION="${EG_VERSION:-v1.9.2}"
+AIEG_VERSION="${AIEG_VERSION:-v1.2.0}"
+GAIE_VERSION="${GAIE_VERSION:-v1.6.0}"
 H="helm --kube-context $CTX"
 
 echo "==> [1/5] Gateway API Inference Extension CRDs $GAIE_VERSION"
@@ -16,13 +16,20 @@ kubectl --context "$CTX" apply --server-side -f \
 
 kubectl --context "$CTX" apply -f "$ROOT/envoy-ai-gateway/deploy/kserve/base/envoy-inferencepool-rbac.yaml"
 
+# Retained feature policies require the global rate-limit service to stay
+# enabled during a base-stack upgrade. Dropping it invalidates those policies
+# and can prevent the proxy from receiving its initial xDS configuration.
+EG_VALUES=(-f "$ROOT/envoy-ai-gateway/values/envoy-gateway.values.yaml")
+if kubectl --context "$CTX" -n ai-demo get backendtrafficpolicy kserve-mock >/dev/null 2>&1; then
+  EG_VALUES+=(-f "$ROOT/envoy-ai-gateway/values/envoy-gateway.ratelimit.values.yaml")
+fi
+
 echo "==> [2/5] Envoy Gateway $EG_VERSION"
 $H upgrade -i eg "$ROOT/envoy-ai-gateway/charts/gateway-helm-${EG_VERSION}.tgz" \
   --namespace envoy-gateway-system --create-namespace \
-  -f "$ROOT/envoy-ai-gateway/values/envoy-gateway.values.yaml" --wait --timeout 5m
+  "${EG_VALUES[@]}" --wait --timeout 5m
 kubectl --context "$CTX" wait --timeout=3m -n envoy-gateway-system \
   deployment/envoy-gateway --for=condition=Available
-bash "$ROOT/scripts/fix-envoy-gateway-crd.sh" "$CTX"
 
 echo "==> [3/5] AI Gateway CRDs $AIEG_VERSION"
 $H upgrade -i aieg-crd "$ROOT/envoy-ai-gateway/charts/ai-gateway-crds-helm-${AIEG_VERSION}.tgz" \

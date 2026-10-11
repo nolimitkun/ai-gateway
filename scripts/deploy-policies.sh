@@ -13,7 +13,7 @@ source "$ROOT/scripts/component-env.sh"
 KUADRANT_CTX=kind-ai-gw-kuadrant
 ENVOY_CTX=kind-ai-gw-envoy
 AGENT_CTX=kind-ai-gw-agent
-EG_VERSION="${EG_VERSION:-v1.8.1}"
+EG_VERSION="${EG_VERSION:-v1.9.2}"
 DELETE=false
 SELECTED_CONTEXT=""
 while (($#)); do
@@ -122,7 +122,6 @@ fi
 
 if context_selected "$ENVOY_CTX"; then
   echo "==> Envoy Gateway rate limit backend"
-  bash "$ROOT/scripts/fix-envoy-gateway-crd.sh" "$ENVOY_CTX"
   kubectl --context "$ENVOY_CTX" apply -f "$COMPONENT_ROOT/policies/redis.yaml"
   kubectl --context "$ENVOY_CTX" -n redis-system rollout status deployment/redis --timeout=5m
   helm --kube-context "$ENVOY_CTX" upgrade -i eg \

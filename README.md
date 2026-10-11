@@ -39,17 +39,59 @@ repository has deferred -- places where the current behaviour was a side effect
 rather than a choice, or where a gap could be closed and has not been. It is
 separate from the comparison table, which records what each stack does.
 
+## Gateway release refresh (2026-10-10)
+
+The vendored gateway charts and installer defaults now use
+[agentgateway 1.6.0](https://github.com/agentgateway/agentgateway/releases/tag/v1.6.0),
+[Kuadrant 1.5.3](https://github.com/Kuadrant/kuadrant-operator/releases/tag/v1.5.3),
+[Envoy Gateway 1.9.2](https://github.com/envoyproxy/gateway/releases/tag/v1.9.2), and
+[Agent Router 1.2.0](https://github.com/theagentrouter/agent-router/releases/tag/v1.2.0).
+Agent Router is the new upstream name for Envoy AI Gateway; chart names, images,
+API groups, repository directories, and Make targets retain their existing names.
+Gateway API Inference Extension CRD installers use 1.6.0. Istio is pinned to
+1.30.5, the newest stable `base` and `istiod` charts available in the official
+chart index during this refresh; the GitHub release 1.31.1 was unavailable there.
+Shared KServe, BBR, identity, and GPU runtime pins remain as listed below.
+
+agentgateway 1.6 enables `AgentgatewayModel` by default. Our custom native
+providers explicitly advertise Completions, so the new preference for Responses
+when converting Anthropic requests does not add a Responses requirement here.
+The release also adds per-key local rate limits; the fixture now keys local
+buckets on verified JWT usernames and charges both org and team rules. Envoy Gateway now uses int64 for request limits, so the
+old CRD maximum patch has been removed. Agent Router generates a persistent
+random MCP session encryption secret; upgrading ends existing MCP sessions.
+
+All three refreshed stacks were tested sequentially on retained local Kind
+clusters on 2026-10-10, with policies, semantic routing, and native routing
+where available. Each served 30/30 sampled chat requests and routed all four
+BBR accelerator pools; the live comparison table below contains the fresh
+results. See [local test details](docs/local-gateway-tests-2026-10-10.md) for
+coverage, remaining limitations, and upgrade repairs.
+
+The tests exposed two reconciliation issues that are now fixed: Envoy's base
+installer preserves global rate-limit configuration when feature policies
+already exist, and retained ext-proc/native overlay objects use server-side
+apply to avoid clearing managed metadata from stale saved configurations.
+
+The inference-path atlas and detailed causal investigations in the unresolved
+behavior notes remain August evidence (Kuadrant 1.5.2 / Istio 1.29.2, Envoy AI
+Gateway 1.0.0 / Envoy Gateway 1.8.1, agentgateway 1.4.1). Matching outcomes in
+the fresh sweep do not by themselves revalidate those causal explanations.
+To reconcile and measure each local stack, run `make up CLUSTER=<name>`, reapply
+optional policies or routing overlays, then `make compare CLUSTER=<name>`;
+merge all three results with `make comparison-summary`.
+
 ## Gateway comparison
 
 This is the canonical gateway comparison. Other tables in this README describe
 models, APIs, accelerator pools, or deployment platforms—not differences
-between the three gateways. It inventories the pinned APIs; it does not imply
-that every row is exercised by the default KServe fixture. The evidence table
+between the three gateways. It inventories the fixture APIs and historical
+behavior; it does not imply that every row is exercised by the default KServe fixture. The evidence table
 below separates live behavior from schema-only and path-limited capabilities.
 
 | Comparison | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Pinned stack | Kuadrant 1.5.2, Istio 1.29.2, Envoy proxy | Envoy AI Gateway 1.0.0, Envoy Gateway 1.8.1 | agentgateway 1.4.1 |
+| Pinned stack | Kuadrant 1.5.3, Istio 1.30.5, Envoy proxy | Agent Router (formerly Envoy AI Gateway) 1.2.0, Envoy Gateway 1.9.2 | agentgateway 1.6.0 |
 | Local URL | <http://localhost:8082> | <http://localhost:8080> | <http://localhost:8081> |
 | Data plane | Envoy managed by Istio | Envoy managed by Envoy Gateway | agentgateway Rust proxy |
 | Gateway topology | OpenShift-aligned shared `Gateway/openshift-ai-inference` in `openshift-ingress` | `Gateway/ai-gateway` in `ai-demo` | `Gateway/ai-gateway` in `ai-demo` |
@@ -64,8 +106,8 @@ below separates live behavior from schema-only and path-limited capabilities.
 | Long quota windows | Any window through 24 hours in the same policy | Day, Month, or Year | Local mode stops at Hours; longer windows require global rate limiting |
 | Token budgets | `TokenRateLimitPolicy` reads response `usage.total_tokens` | `llmRequestCosts` through the AI Gateway ext-proc | `unit: Tokens` requires an agentgateway AI backend with tokenization; unavailable on this generic KServe `InferencePool` |
 | Counter storage | Limitador installed by the operator | External Redis and rate-limit service for global limits | In-process for local limits |
-| Per-identity buckets | CEL counters are supported; this pinned Istio fixture uses shared probe buckets because Authorino identity metadata is not exposed to the 1.5.2 Wasm rate-limit action | Header descriptors | CEL descriptors in global mode; local mode is shared per proxy |
-| Nested limit buckets (org/team/user) | One named limit per level, each with its own CEL `counters` — but nothing the caller cannot forge actually keys them here | One global rule per level; `shared: true` would span routes but silently disables the token budget, so buckets stay per-route | `local` takes no key and `conditional` is first-match-wins, so only `rateLimit.global` nests — needs an external rate-limit service |
+| Per-identity buckets | CEL counters are supported; this pinned Istio fixture uses shared probe buckets because Authorino identity metadata is not available as a trusted key in the tested Wasm rate-limit path | Header descriptors | CEL `local[].key` (new in 1.6) uses verified JWT claims; counters remain per proxy |
+| Nested limit buckets (org/team/user) | One named limit per level, each with its own CEL `counters` — but nothing the caller cannot forge actually keys them here | One global rule per level; `shared: true` would span routes but silently disables the token budget, so buckets stay per-route | Multiple keyed local rules in one conditional policy charge org and team; global mode is needed for distributed budgets |
 | Group hierarchy in rules | Exact `incl`, or a CEL `predicate` over the path claim | Exact claim values only; no prefix or regex, so nesting needs a flattened claim | CEL `startsWith` over the group path claim |
 | Body-model routing | No body-aware routing API; a raw `EnvoyFilter` drives the external BBR | `AIGatewayRoute` extracts the model from the request content before the routing decision | `AgentgatewayModel` `match.model` with a `Custom` provider pointing at the `InferencePool` |
 | Per-model authorization | Header test on the routing header BBR writes | Header test on the routing header, whichever filter wrote it | `AgentgatewayModel` `policies.authorization`, attached to the model itself |
@@ -75,6 +117,29 @@ below separates live behavior from schema-only and path-limited capabilities.
 | Provider credentials | Not provided by the compared policy | `BackendSecurityPolicy` | Backend authentication on `AgentgatewayBackend` |
 | MCP routing | Not provided by the compared policy | `MCPRoute` | Native MCP routing with OAuth |
 | Telemetry controls | `TelemetryPolicy` metric labels | `EnvoyProxy` telemetry | `frontend.metrics`, tracing, and access logs |
+
+### Release feature coverage
+
+Release availability and runtime evidence are separate. The existing isolation,
+tenant and native-routing rows below are now supplemented by a catalog-hiding
+probe. The remaining entries identify fixture work before claiming support.
+
+| Release addition | Kuadrant profile | Envoy / Agent Router profile | agentgateway profile | Evidence / next test |
+|---|---|---|---|---|
+| Keyed local rate limits | Existing CEL counter API; fixture remains shared | Existing user descriptors with Redis | New 1.6 `local[].key`, verified JWT username | Live rate isolation row below |
+| Local nested org/team budgets | Fixture tenant limits unenforced | Nested global descriptors, scoped per route | New keyed local rules; no external rate-limit service | Live nesting and forged-header rows below; multi-replica budgets untested |
+| Hide model aliases from discovery | Mock catalog only | New 1.2 `excludeFromModelsEndpoint` | No equivalent configured | New live probe toggles visibility, checks chat, restores catalog |
+| JWT / OIDC changes | Existing JWT regression | Stricter MCP issuer and verified-subject checks | New `nbf` enforcement and standalone OIDC flows | Current JWT regression only; future-token, MCP issuer and browser cases untested |
+| Session affinity | Not exercised | Not exercised | Added in 1.6 | Untested: needs repeat-session and replica-failure probes |
+| LLM buffer / stream idle timeout | Not exercised | Not exercised | 32 MiB LLM default buffer; new idle timeout | Untested on native AI path: needs large-body and stalled-stream fixtures |
+| MCP names, credentials and policy merging | No MCP fixture | New 1.2 bare names, optional key injection, policy merging | 1.6 MCP compatibility improvements | Untested: needs MCP backend, OAuth and isolation probes |
+| Provider formats and cost telemetry | Mock runtime only | New AWSOpenAI / TypeSafe schemas and backend metric labels | Built-in pricing; Anthropic conversion behavior changed | Untested: requires provider-compatible fixtures and telemetry capture |
+| Controller / filter reconciliation | 1.5.3 filter ordering and selector fixes | 1.2 cache-sync readiness fixes | Existing fixture controllers | Fresh deployment and regression sweep; targeted race/reconcile-loop tests untested |
+
+Sources: [agentgateway 1.6 release](https://github.com/agentgateway/agentgateway/releases/tag/v1.6.0),
+[Agent Router 1.2 release](https://github.com/theagentrouter/agent-router/releases/tag/v1.2.0),
+[Kuadrant 1.5.3 release](https://github.com/Kuadrant/kuadrant-operator/releases/tag/v1.5.3).
+
 
 ### Live comparison
 
@@ -89,7 +154,7 @@ zero-delay Python runtime, not production performance benchmarks.
 
 | Check | OpenShift profile (Kuadrant) | Envoy AI Gateway | agentgateway |
 |---|---|---|---|
-| Last isolated comparison (UTC) | 2026-08-28 00:29 (30 requests) | 2026-08-28 10:53 (30 requests) | 2026-08-28 10:49 (30 requests) |
+| Last isolated comparison (UTC) | 2026-10-10 21:42 (30 requests) | 2026-10-10 21:36 (30 requests) | 2026-10-10 21:32 (30 requests) |
 | Gateway Programmed | Yes | Yes | Yes |
 | `LLMInferenceService` Ready | Yes | Yes | Yes |
 | Route Accepted / ResolvedRefs | Yes / Yes | Yes / Yes | Yes / Yes |
@@ -102,16 +167,17 @@ zero-delay Python runtime, not production performance benchmarks.
 | Streaming usage chunk | Yes | Yes | Yes |
 | Streaming `[DONE]` termination | Yes | Yes | Yes |
 | Model catalog (`GET /v1/models`) | 19 models | 19 models | 19 models |
+| Hide model alias while preserving routing | Not configured in this profile | Passed: qwen3.8-27b hidden; chat 200; catalog restored | Not configured in this profile |
 | Tiered chat models | big/medium/small | big/medium/small | big/medium/small |
 | Embeddings API | Yes | Yes | Yes |
-| RAG embedding models | No | Yes | Yes |
+| RAG embedding models | Yes | Yes | Yes |
 | Embedding dimension validation | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected | 512 accepted / fixed-size rejected |
 | Reranking API | Yes | Yes | Yes |
 | Speech-to-text API | Yes | Yes | Yes |
 | Speaker diarization | 3 speakers | 3 speakers | 3 speakers |
 | Speech capability rejection | ASR-only diarization rejected | ASR-only diarization rejected | ASR-only diarization rejected |
 | Negative API contracts | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 | 404 / 400 / 400 / 400 / 400 |
-| Local chat p50 | 31 ms | 47 ms | 52 ms |
+| Local chat p50 | 36 ms | 45 ms | 52 ms |
 | Policy objects reporting ready | 3/3 | 3/3 | 6/6 |
 | Semantic router ext_proc attachment | Present, no status | Accepted | Accepted |
 | Semantic router non-chat scope | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed | 3/3 non-chat tasks bypassed |
@@ -119,7 +185,7 @@ zero-delay Python runtime, not production performance benchmarks.
 | Model and prompt the runtime received | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 | kimi-k3 / deepseek-v4-flash / qwen3.8-27b; system prompt 2/3 |
 | Accelerator pools used by auto decisions | b300 / h200 / h100 | b300 / h200 / h100 | b300 / h200 / h100 |
 | Decision headers returned to the client | big / medium / small | big / medium / small | big / medium / small |
-| Auto-routed chat p50 | 86 ms | 38 ms | 15 ms |
+| Auto-routed chat p50 | 57 ms | 58 ms | 82 ms |
 | Semantic router unavailable | explicit 200 / auto 404 / restored | explicit 200 / auto 404 / restored | explicit 500 / auto 500 / restored |
 | Keycloak token issuance | Yes | Yes | Yes |
 | Authentication: anonymous / forged / valid | 401 / 401 / 200 | 401 / 401 / 200 | 401 / 401 / 200 |
@@ -130,10 +196,10 @@ zero-delay Python runtime, not production performance benchmarks.
 | Tier ceiling: medium→big / big→big | medium 403 / big 200 | medium 403 / big 200 | medium 403 / big 200 |
 | Tenant metadata cannot bypass tier | Denied by small tier (HTTP 403) | Denied by small tier (HTTP 403) | Denied by small tier (HTTP 403) |
 | Request rate limit (5 per minute) | 429 on request 6 of 8 | 429 on request 6 of 8 | 429 on request 6 of 8 |
-| Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | shared; Bob HTTP 429 |
-| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 1 of 6; shared bucket |
-| Nested org/team buckets (org 5, team 3) | unenforced: team A no 429 in 4; team B no 429 in 4; other org no 429 in 3 | nested: team A 429 on request 4 of 4; team B 429 on request 2 of 4; other org no 429 in 3 | Needs an external rate limit service |
-| Forged tenant header | HONOURED -- bucket escaped (HTTP 200) | Ignored (HTTP 429) | Not applicable without tenant buckets |
+| Rate-limit bucket isolation | shared; Bob HTTP 429 | per-user; Bob HTTP 200 | per-user; Bob HTTP 200 |
+| Quota limit (3 per window) | 429 on request 4 of 6; shared bucket | 429 on request 4 of 6 | 429 on request 4 of 6 |
+| Nested org/team buckets (org 5, team 3) | unenforced: team A no 429 in 4; team B no 429 in 4; other org no 429 in 3 | nested: team A 429 on request 4 of 4; team B 429 on request 2 of 4; other org no 429 in 3 | nested: team A 429 on request 4 of 4; team B 429 on request 3 of 4; other org no 429 in 3 |
+| Forged tenant header | HONOURED -- bucket escaped (HTTP 200) | Ignored (HTTP 429) | Ignored (HTTP 429) |
 | Tenant bucket across both routes | Single inference route | SEPARATE bucket per route -- ceiling doubled | Single inference route |
 | Body-model routing without BBR | No body-aware routing API (raw EnvoyFilter drives BBR) | 8/12 models with BBR scaled to 0; missed qwen3-embedding-8b, e5-mistral-7b-instruct, bge-reranker-v2-m3, jina-reranker-v2-base-multilingual | 5/12 models with BBR scaled to 0; missed qwen3-embedding-8b, e5-mistral-7b-instruct, bge-m3, jina-embeddings-v3, nomic-embed-text-v2-moe, bge-reranker-v2-m3, jina-reranker-v2-base-multilingual |
 | Native path: forged model header | No body-aware routing API (raw EnvoyFilter drives BBR) | Body wins; forged header ignored | No client-visible model header |
@@ -182,10 +248,10 @@ Evidence labels are deliberately strict:
 | Models, chat/SSE, embeddings, rerank, STT | Live | Live | Live | Valid and invalid contracts, `[DONE]`, dimensions, and unsupported diarization |
 | JWT and authorization | Live | Live | Live | Anonymous, forged, guest, member, and admin requests; all five APIs require a valid token |
 | Identity export to the model | Live | Live | Not configured | Allowlisted non-secret evidence headers are echoed by the mock runtime |
-| Request limits and quota threshold | Live, shared bucket | Live, per-user bucket | Live, shared local bucket | Limit threshold and Alice/Bob isolation are tested; full expiry windows are not waited out |
+| Request limits and quota threshold | Live, shared bucket | Live, per-user bucket | Live, JWT-keyed local buckets | Limit threshold and Alice/Bob isolation are tested; full expiry windows are not waited out |
 | Token budget on KServe path | Live | Live | Path-limited | agentgateway token units need an AI backend/tokenizer, not a generic `InferencePool` |
 | CORS allow and reject | Not provided | Live | Live | Approved and unapproved origins are both probed |
-| Chat-only external processing | Live, raw `EnvoyFilter` | Live | Live | Selection, response headers, non-chat bypass, fail-open, and restoration are tested |
+| Chat-only external processing | Live, raw `EnvoyFilter` | Live | Live | Selection, response headers, non-chat bypass, outage behavior, and restoration are tested |
 | Endpoint-picker transport | Live TLS | Live plaintext fixture | Live plaintext fixture | Kuadrant additionally asserts `BackendTLSPolicy` readiness; this row describes EPP, not BBR |
 | BBR transport | Live self-signed TLS | Live self-signed TLS | Live self-signed TLS | Istio `DestinationRule`, Envoy `Backend`, and `AgentgatewayBackend` originate HTTP/2 TLS |
 | API-key authentication | Schema | Schema | Schema | Requires separate secrets and an authentication-composition test matrix |
@@ -306,22 +372,22 @@ cluster is a single Kubernetes 1.36.1 node.
 | Layer | Shared or stack-specific dependency | Pinned version |
 |---|---|---|
 | Kubernetes | One independent Kind cluster per gateway | 1.36.1 (`kindest/node` digest pinned) |
-| Gateway API Inference Extension | Required before gateway and KServe controllers | 1.5.0 |
+| Gateway API Inference Extension | Required before gateway and KServe controllers | 1.6.0 |
 | Body-Based Router | JSON `body.model` to the internal Gateway API model header | 1.2.1 |
 | KServe LLMInferenceService | Shared inference controller in each cluster | 0.20.0 |
 | cert-manager | KServe webhooks; also endpoint-picker TLS in the OpenShift profile | 1.17.0 |
 | Identity | Keycloak realm imported independently in each cluster | 26.4.0 |
-| OpenShift profile | Gateway API 1.4.1, Istio, then Kuadrant | Istio 1.29.2; Kuadrant 1.5.2 |
-| Envoy path | Envoy Gateway, then Envoy AI Gateway | 1.8.1; 1.0.0 |
-| agentgateway path | Gateway API 1.6.0, then agentgateway | 1.4.1 |
+| OpenShift profile | Gateway API 1.4.1, Istio, then Kuadrant | Istio 1.30.5; Kuadrant 1.5.3 |
+| Envoy path | Envoy Gateway, then Envoy AI Gateway | 1.9.2; 1.2.0 |
+| agentgateway path | Gateway API 1.6.0, then agentgateway | 1.6.0 |
 | Optional semantic router | Runs after the KServe route exists | 0.3.0 |
 
 Install order is enforced independently for each cluster: Kind node and CRDs →
 selected gateway controller → KServe controller → mock runtime ConfigMap →
 Gateway → `LLMInferenceService`, BBR, and route → optional Keycloak policies →
-optional semantic router. The Envoy policy installer also corrects the
-vendored Envoy Gateway 1.8.1 `BackendTrafficPolicy` int32 schema maximum before
-applying limits.
+optional semantic router. Envoy Gateway 1.9.2 uses an int64 for the
+`BackendTrafficPolicy` request limit, so the previous int32 maximum workaround
+is no longer needed.
 
 BBR 1.2.1 always generates an ephemeral self-signed serving certificate. The
 local fixture therefore enables upstream TLS but skips certificate verification:
@@ -351,8 +417,8 @@ flowchart TB
       BF["EnvoyFilter/model-body-router<br/>JSON task rules"] -. programs .-> GW
     end
     subgraph KSYS["istio-system + kuadrant-system"]
-      ISTIOD["istiod 1.29.2"] --> GW
-      KOP["Kuadrant operator 1.5.2"] --> WASM["Wasm auth/rate-limit actions"] --> GW
+      ISTIOD["istiod 1.30.5"] --> GW
+      KOP["Kuadrant operator 1.5.3"] --> WASM["Wasm auth/rate-limit actions"] --> GW
       AUTH["Authorino"] <-->|"JWT/authz"| WASM
       LIM["Limitador"] <-->|"request + token counters"| WASM
     end
@@ -385,8 +451,8 @@ flowchart TB
 |---|---|
 | Cluster / context | `ai-gw-kuadrant` / `kind-ai-gw-kuadrant` |
 | Public endpoint | `http://localhost:8082`; one OpenShift-style shared Gateway in `openshift-ingress` |
-| Control/data plane | Kuadrant 1.5.2 and Istio 1.29.2 program an Envoy gateway proxy |
-| Gateway API versions | Gateway API 1.4.1; Inference Extension 1.5.0 |
+| Control/data plane | Kuadrant 1.5.3 and Istio 1.30.5 program an Envoy gateway proxy |
+| Gateway API versions | Gateway API 1.4.1; Inference Extension 1.6.0 |
 | Security | Keycloak JWT plus big-tier authorization through `AuthPolicy` and Authorino |
 | Limits | Limitador-backed request, quota, and response `usage.total_tokens` accounting; fixture probe buckets are shared |
 | Model-to-pool routing | Raw Istio `EnvoyFilter` runs BBR only on named JSON task/model rules; a TLS `DestinationRule` handles BBR's runtime self-signed certificate |
@@ -407,11 +473,11 @@ flowchart TB
 
   subgraph K["ai-gw-envoy · Kubernetes 1.36.1"]
     subgraph EGS["envoy-gateway-system"]
-      EGC["Envoy Gateway 1.8.1 controller"] --> GW["Gateway/ai-gateway<br/>Envoy proxy"]
+      EGC["Envoy Gateway 1.9.2 controller"] --> GW["Gateway/ai-gateway<br/>Envoy proxy"]
       RLS["Envoy global rate-limit service"] <-->|"descriptors/cost"| GW
     end
     subgraph AIS["envoy-ai-gateway-system"]
-      AIC["Envoy AI Gateway 1.0.0 controller"] --> AIR
+      AIC["Agent Router (formerly Envoy AI Gateway) 1.2.0 controller"] --> AIR
       AIC --> AIP["AI ext_proc<br/>token metadata"] --> GW
     end
     subgraph REDIS["redis-system"]
@@ -447,8 +513,8 @@ flowchart TB
 |---|---|
 | Cluster / context | `ai-gw-envoy` / `kind-ai-gw-envoy` |
 | Public endpoint | `http://localhost:8080`; `Gateway/ai-gateway` in `ai-demo` |
-| Control/data plane | Envoy Gateway 1.8.1 plus Envoy AI Gateway 1.0.0 program an Envoy proxy |
-| Gateway API versions | Inference Extension 1.5.0; Envoy Gateway supplies its Gateway API CRDs |
+| Control/data plane | Envoy Gateway 1.9.2 plus Agent Router (formerly Envoy AI Gateway) 1.2.0 program an Envoy proxy |
+| Gateway API versions | Inference Extension 1.6.0; Envoy Gateway supplies its Gateway API CRDs |
 | Security | `SecurityPolicy` verifies Keycloak JWT, exports user/tier headers, applies tier-ceiling authorization and CORS |
 | Limits | `BackendTrafficPolicy` global limits; Envoy rate-limit service stores keyed counters in Redis |
 | Token path | `Host: ai.local` uses `AIGatewayRoute`; AI ext_proc publishes `llm_total_token` consumed as response cost |
@@ -456,7 +522,7 @@ flowchart TB
 | Semantic routing | One ordered policy runs semantic-router then BBR, so explicit and `auto` models reach their accelerator pools; non-chat tasks bypass semantic routing |
 | KServe connection | Body-derived and AI-generated HTTP routes end at KServe `InferencePool` resources and their EPPs |
 | Deep live evidence | 30-request routing sample; four body-routed pools; five APIs; JWT/authz/identity; per-user rate/quota; token budget; CORS allow/reject; ext_proc scope/fail-open |
-| Installer compatibility fix | Clamps the invalid uint32 maximum in the 1.8.1 int32 `BackendTrafficPolicy` CRD |
+| Request-limit CRD | Upstream int64 schema; no local maximum patch needed |
 
 ### agentgateway
 
@@ -466,7 +532,7 @@ flowchart TB
 
   subgraph K["ai-gw-agent · Kubernetes 1.36.1"]
     subgraph AGS["agentgateway-system"]
-      AGC["agentgateway controller 1.4.1"] --> GW
+      AGC["agentgateway controller 1.6.0"] --> GW
     end
     subgraph APP["ai-demo"]
       GW["Gateway/ai-gateway<br/>Rust proxy"]
@@ -501,15 +567,15 @@ flowchart TB
 |---|---|
 | Cluster / context | `ai-gw-agent` / `kind-ai-gw-agent` |
 | Public endpoint | `http://localhost:8081`; UI through `make agent-ui` at `http://localhost:15000/ui` |
-| Control/data plane | agentgateway 1.4.1 controller and Rust proxy |
-| Gateway API versions | Gateway API 1.6.0; Inference Extension 1.5.0 |
+| Control/data plane | agentgateway 1.6.0 controller and Rust proxy |
+| Gateway API versions | Gateway API 1.6.0; Inference Extension 1.6.0 |
 | Security | Separate `AgentgatewayPolicy` resources for Keycloak JWT, small/medium/big tier ceilings, and CORS |
-| Limits | In-process local request/minute and quota/hour counters, shared per proxy; global mode is required for durable keyed windows |
+| Limits | In-process keyed request/minute and quota/hour counters per proxy; global mode is required for distributed or durable windows |
 | Token boundary | Generic KServe `InferencePool` does not publish agentgateway AI-backend tokenization metadata, so token units are reported unavailable |
 | Model-to-pool routing | Gateway-scoped PreRouting BBR uses a native `AgentgatewayBackend` with HTTP/2 TLS and handles chat, embedding, and rerank JSON bodies; with the semantic router installed it keeps the task paths and the router takes chat |
-| Semantic routing | Route-scoped semantic ext_proc runs after PreRouting BBR in v1.4.1: selection works, but `auto` stays on shared pool `all`; explicit models reach accelerator pools |
+| Semantic routing | PreRouting ext-proc selects chat models and writes the pool-routing header; `auto` reaches B300/H200/H100; chat fails closed when the semantic router is unavailable |
 | KServe connection | Body-derived route rule → KServe `InferencePool` → EPP → model pods |
-| Deep live evidence | 30-request routing sample; four explicit body-routed pools; five APIs; JWT/authz; shared local rate/quota; CORS allow/reject; ext_proc scope/fail-open |
+| Deep live evidence | 30-request routing sample; four explicit body-routed pools; five APIs; JWT/authz; JWT-keyed local rate/quota; CORS allow/reject; ext_proc scope/fail-open |
 | Additional native surface | AI backends, prompt guards, model aliases/caching, MCP routing/OAuth, tracing, metrics, and access logs |
 
 ## Runtime profiles
@@ -701,6 +767,10 @@ the same header, rate-limit descriptors keyed on the rule name. The native APIs
 are closed routing objects that own the decision and expose nothing to attach
 to. They replace BBR's extraction, not its composability.
 
+The following attachment and deletion investigations were performed in August
+on the earlier pins. The October sweep confirms the 8/12 Envoy and 5/12
+agentgateway counts, but does not repeat these causal experiments.
+
 Concretely: `AIGatewayRoute.rules` has no `name` field in either API version,
 so the chat-only semantic router cannot be scoped to chat -- attached to the
 whole route it answers embeddings and rerank with its own 404, and omitted,
@@ -845,15 +915,14 @@ The stack-specific edges are intentional and recorded in the live table:
   Kuadrant CORS policy and returns HTTP 405;
 - the pinned Kuadrant profile uses shared opt-in rate/quota/token buckets. The
   product API supports authenticated CEL counters, but Authorino identity
-  metadata is not exposed to the rate-limit action in this local 1.5.2 Wasm
-  topology. Envoy uses per-user descriptors, while agentgateway local mode is
-  shared per proxy.
+  metadata did not supply a trusted rate-limit key in the tested local Wasm
+  topology. Envoy uses per-user descriptors, while agentgateway 1.6 uses verified JWT
+  keys for local per-user buckets within each proxy.
 
 Probe headers isolate rate-limit tests from ordinary traffic:
 `x-rate-limit-probe`, `x-quota-probe`, `x-token-limit-probe`, and
-`x-tenant-probe`. Envoy uses the quota probe value as a fresh key. Kuadrant and
-agentgateway use shared buckets for the first three, which the comparison
-output labels explicitly. The tenant probe carries one value per run shared by
+`x-tenant-probe`. Envoy and agentgateway use the quota probe value as a fresh
+key. Kuadrant uses shared buckets, which the comparison output labels explicitly. The tenant probe carries one value per run shared by
 every probe user, so the org bucket they are meant to contend for is the same
 bucket.
 
@@ -912,7 +981,7 @@ for the same request, and whichever empties first returns the 429. Team caps
 are over-subscribed against the org cap on purpose — the parent is the real
 ceiling, and the child only stops one team eating it alone.
 
-Each stack reaches this differently, and one cannot:
+The stacks use different counter mechanisms:
 
 - **Envoy AI Gateway** — one global rate-limit rule per level, keyed
   `type: Distinct`. Nesting works, and it comes with a trade-off that only a
@@ -946,13 +1015,14 @@ Each stack reaches this differently, and one cannot:
   limit file over it and crash-loops on a cold start, taking every rate limit
   in the policy with it — while the `RateLimitPolicy` still reports
   `Enforced: True`. Use single quotes; `make validate` rejects a double one.
-- **agentgateway** — not expressible with what is deployed. A `local` bucket
-  takes no key at all, and while the `conditional` wrapper does take CEL, only
-  "the first matching policy will be executed" — first-match-wins cannot charge
-  an org bucket and a team bucket for one request. `rateLimit.global` nests
-  cleanly and handles token cost natively, but requires an external rate-limit
-  service this repository deploys for Envoy Gateway only. A deployment gap
-  rather than a capability gap.
+- **agentgateway 1.6** — local rules now accept a CEL `key`. The fixture
+  charges two rules inside one selected conditional policy: `jwt.org` and
+  `jwt.org + jwt.team`, both scoped by the test-run header. The first-match
+  behavior chooses the policy, while its list of local rules supplies nesting.
+  Client org/team headers do not choose the identity. These are per-proxy,
+  bounded in-memory counters; replicas, restarts and eviction prevent treating
+  them as distributed or durable quotas. Global rate limiting remains an
+  optional deployment for those requirements.
 
 **Spoofing.** Once a bucket is keyed on `x-org-id`, a caller who can set that
 header picks their own budget. The comparison forges one against an exhausted
@@ -961,11 +1031,12 @@ allowance, and the row says so.
 
 `scripts/validate-tenant-model.py` (part of `make validate`) holds the pieces
 together offline — the probe users exist and are password-grantable, two share
-an org and one does not, the caps in both stacks agree with the caps the
+an org and one does not, the caps in all three stacks agree with the caps the
 harness classifies against, the caps are spaced so the three outcomes stay
 distinguishable, `shared: true` stays off the Envoy tenant rules for as long as
 that policy also charges a response cost, and no Kuadrant counter expression
-carries the double quote that crash-loops Limitador.
+carries the double quote that crash-loops Limitador. It also checks that
+agentgateway tenant keys use verified claims.
 
 ## Semantic routing layer
 

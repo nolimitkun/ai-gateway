@@ -110,9 +110,9 @@ if $DELETE; then
     if [[ "$ctx" == "$ENVOY_CTX" ]]; then
       if kubectl --context "$ctx" -n ai-demo get httproute kserve-mock \
         -o 'jsonpath={.spec.rules[*].name}' | grep -qw model-kimi-k3; then
-        kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-chat-extproc-pools.yaml"
+        kubectl --context "$ctx" apply --server-side --force-conflicts -f "$LLMD_MANIFESTS/envoy-chat-extproc-pools.yaml"
       else
-        kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-chat-extproc.yaml"
+        kubectl --context "$ctx" apply --server-side --force-conflicts -f "$LLMD_MANIFESTS/envoy-chat-extproc.yaml"
       fi
     fi
     kubectl --context "$ctx" delete -f "$MANIFESTS/semantic-router.yaml" --ignore-not-found
@@ -148,7 +148,13 @@ for ctx in "$KUADRANT_CTX" "$ENVOY_CTX" "$AGENT_CTX"; do
     kubectl --context "$ctx" -n ai-demo delete \
       agentgatewaypolicy/kserve-mock-semantic-router --ignore-not-found
   fi
-  kubectl --context "$ctx" apply -f "$(attachment_for "$ctx")"
+  if [[ "$ctx" == "$ENVOY_CTX" ]]; then
+    # This repository owns the ext-proc chain; take over retained client-side
+    # field ownership when migrating it to server-side apply.
+    kubectl --context "$ctx" apply --server-side --force-conflicts -f "$(attachment_for "$ctx")"
+  else
+    kubectl --context "$ctx" apply -f "$(attachment_for "$ctx")"
+  fi
   case "$ctx" in
     "$ENVOY_CTX") wait_condition "$ctx" envoyextensionpolicy/model-body-router-chat Accepted ;;
     "$AGENT_CTX") wait_condition "$ctx" agentgatewaypolicy/model-body-router Accepted ;;

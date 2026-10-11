@@ -127,19 +127,19 @@ fi
 case "$SELECTED_CONTEXT" in
   "$ENVOY_CTX")
     echo "==> AIGatewayRoute and SecurityPolicy in $SELECTED_CONTEXT"
-    kubectl --context "$SELECTED_CONTEXT" apply -f "$MANIFESTS/ai-route.yaml"
-    kubectl --context "$SELECTED_CONTEXT" apply -f "$MANIFESTS/security-policy.yaml"
+    kubectl --context "$SELECTED_CONTEXT" apply --server-side --force-conflicts -f "$MANIFESTS/ai-route.yaml"
+    kubectl --context "$SELECTED_CONTEXT" apply --server-side --force-conflicts -f "$MANIFESTS/security-policy.yaml"
     wait_condition "$SELECTED_CONTEXT" aigatewayroute/kserve-mock-native Accepted
     wait_condition "$SELECTED_CONTEXT" securitypolicy/kserve-mock-native Accepted
     ;;
   "$AGENT_CTX")
     echo "==> native listener in $SELECTED_CONTEXT"
-    kubectl --context "$SELECTED_CONTEXT" apply -f "$MANIFESTS/gateway.yaml"
+    kubectl --context "$SELECTED_CONTEXT" apply --server-side --force-conflicts -f "$MANIFESTS/gateway.yaml"
     kubectl --context "$SELECTED_CONTEXT" -n ai-demo wait --for=condition=Programmed \
       gateway/ai-gateway --timeout=5m
     echo "==> models and listener policies in $SELECTED_CONTEXT"
-    kubectl --context "$SELECTED_CONTEXT" apply -f "$MANIFESTS/policies.yaml"
-    kubectl --context "$SELECTED_CONTEXT" apply -f "$MANIFESTS/models.yaml"
+    kubectl --context "$SELECTED_CONTEXT" apply --server-side --force-conflicts -f "$MANIFESTS/policies.yaml"
+    kubectl --context "$SELECTED_CONTEXT" apply --server-side --force-conflicts -f "$MANIFESTS/models.yaml"
     wait_condition "$SELECTED_CONTEXT" agentgatewaypolicy/kserve-mock-native-jwt Accepted
     wait_condition "$SELECTED_CONTEXT" agentgatewaypolicy/kserve-mock-native-small-tier Accepted
     ;;

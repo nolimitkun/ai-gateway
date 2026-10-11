@@ -106,7 +106,7 @@ case "$ctx" in
     kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/kuadrant-extproc.yaml"
     ;;
   kind-ai-gw-envoy)
-    kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-backend.yaml"
+    kubectl --context "$ctx" apply --server-side --force-conflicts -f "$BBR_MANIFESTS/envoy-backend.yaml"
     # Migration from the former standalone semantic-router policy. It targets
     # the same chat section and Envoy Gateway correctly marks both policies
     # conflicted if the old object is left behind.
@@ -116,21 +116,21 @@ case "$ctx" in
     # reconcile; otherwise install the normal explicit-model chat processor.
     if kubectl --context "$ctx" -n ai-demo get deployment semantic-router >/dev/null 2>&1; then
       if $pools_present; then
-        kubectl --context "$ctx" apply -f "$SEMANTIC_MANIFESTS/envoy-extproc-pools.yaml"
+        kubectl --context "$ctx" apply --server-side --force-conflicts -f "$SEMANTIC_MANIFESTS/envoy-extproc-pools.yaml"
       else
-        kubectl --context "$ctx" apply -f "$SEMANTIC_MANIFESTS/envoy-extproc.yaml"
+        kubectl --context "$ctx" apply --server-side --force-conflicts -f "$SEMANTIC_MANIFESTS/envoy-extproc.yaml"
       fi
     else
       if $pools_present; then
-        kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-chat-extproc-pools.yaml"
+        kubectl --context "$ctx" apply --server-side --force-conflicts -f "$BBR_MANIFESTS/envoy-chat-extproc-pools.yaml"
       else
-        kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-chat-extproc.yaml"
+        kubectl --context "$ctx" apply --server-side --force-conflicts -f "$BBR_MANIFESTS/envoy-chat-extproc.yaml"
       fi
     fi
     if $pools_present; then
-      kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-task-extproc-pools.yaml"
+      kubectl --context "$ctx" apply --server-side --force-conflicts -f "$BBR_MANIFESTS/envoy-task-extproc-pools.yaml"
     else
-      kubectl --context "$ctx" apply -f "$BBR_MANIFESTS/envoy-task-extproc.yaml"
+      kubectl --context "$ctx" apply --server-side --force-conflicts -f "$BBR_MANIFESTS/envoy-task-extproc.yaml"
     fi
     wait_for_policy "$ctx" envoyextensionpolicy/model-body-router-chat
     wait_for_policy "$ctx" envoyextensionpolicy/model-body-router-tasks

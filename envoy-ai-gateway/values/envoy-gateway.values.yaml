@@ -8,7 +8,7 @@
 #
 # Use this file when installing Envoy Gateway with:
 #   helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm \
-#     --version v0.0.0-latest \
+#     --version v1.9.2 \
 #     --namespace envoy-gateway-system \
 #     --create-namespace \
 #     -f envoy-gateway-values.yaml

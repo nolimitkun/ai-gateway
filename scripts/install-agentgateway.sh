@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the agentgateway stack into kind-ai-gw-agent.
-# agentgateway v1.4.1 is self-contained: it ships its own controller and
+# agentgateway v1.6.0 is self-contained: it ships its own controller and
 # GatewayClass ("agentgateway"), so no additional Gateway provider is required.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -8,8 +8,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CTX="$1"
 [[ "$CTX" == kind-ai-gw-agent ]] || { echo "install-agentgateway.sh only supports kind-ai-gw-agent" >&2; exit 2; }
 GWAPI_VERSION="${GWAPI_VERSION:-1.6.0}"
-GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
-AGW_VERSION="${AGW_VERSION:-v1.4.1}"
+GAIE_VERSION="${GAIE_VERSION:-v1.6.0}"
+AGW_VERSION="${AGW_VERSION:-v1.6.0}"
 H="helm --kube-context $CTX"
 
 echo "==> [1/4] Gateway API CRDs v${GWAPI_VERSION} (standard channel)"

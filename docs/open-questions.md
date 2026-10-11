@@ -1,5 +1,10 @@
 # Open questions
 
+Gateway charts and the root README live comparison were refreshed on
+2026-10-10. Detailed causal observations below remain August evidence; see
+the root README and `docs/local-gateway-tests-2026-10-10.md` for fresh probe
+results, current pins, and upgrade details.
+
 Decisions this repository has deferred, not limitations it has measured. The
 comparison table in the README records what each stack *does*; this file
 records the places where what it does was a side effect rather than a choice,
@@ -113,20 +118,19 @@ API covers.
 
 ## 4. Deploy a rate-limit service for agentgateway?
 
-**Status:** open. Currently reported as a gap.
+**Status:** narrowed by the 1.6 upgrade; distributed quotas remain open.
 
-agentgateway's nested org/team buckets are not expressible with what is
-deployed: a `local` entry takes no key, and `conditional` is first-match-wins,
-so it cannot charge an org counter and a team counter for the same request.
-`rateLimit.global` *does* nest, and is the best-specified of the three stacks
-for it — descriptor entries are CEL and so is the per-descriptor cost — but
-`global.backendRef` is required and this repository deploys a rate limit
-service for Envoy Gateway only.
+The earlier 1.4.1 finding that local rules had no key is historical.
+agentgateway 1.6 adds CEL keys to local rules. The fixture now uses verified
+JWT subjects for user limits and two keyed local rules in one conditional
+policy for org/team nesting. The comparison probes nesting and forged tenant
+headers directly, without an external rate-limit service.
 
-So the gap is a deployment task, not a capability gap, and the comparison
-currently reports it as one ("Needs an external rate limit service"). Deploying
-one would let the agentgateway column show nesting and make the row a real
-three-way comparison.
+Local counters remain per proxy, bounded and in memory. They can reset on
+restart or eviction and do not coordinate replicas. `rateLimit.global` remains
+the path for distributed budgets and longer windows. This repository still
+does not deploy its required external service for agentgateway; multi-replica,
+restart and long-window quota behavior remain untested.
 
 ---
 

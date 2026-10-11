@@ -46,11 +46,11 @@ if $DELETE; then
     kubectl --context "$ctx" apply -f "$KSERVE_BASE/route.yaml"
     if [[ "$ctx" == "kind-ai-gw-envoy" ]]; then
       if kubectl --context "$ctx" -n ai-demo get deployment semantic-router >/dev/null 2>&1; then
-        kubectl --context "$ctx" apply -f "$SEMANTIC_MANIFESTS/envoy-extproc.yaml"
+        kubectl --context "$ctx" apply --server-side --force-conflicts -f "$SEMANTIC_MANIFESTS/envoy-extproc.yaml"
       else
-        kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-chat-extproc.yaml"
+        kubectl --context "$ctx" apply --server-side --force-conflicts -f "$LLMD_MANIFESTS/envoy-chat-extproc.yaml"
       fi
-      kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-task-extproc.yaml"
+      kubectl --context "$ctx" apply --server-side --force-conflicts -f "$LLMD_MANIFESTS/envoy-task-extproc.yaml"
     fi
   fi
   echo "OK: accelerator pools removed; the shared KServe path is untouched"
@@ -132,11 +132,11 @@ fi
 # on the request's initial route selection.
 if [[ "$ctx" == "kind-ai-gw-envoy" ]]; then
   if kubectl --context "$ctx" -n ai-demo get deployment semantic-router >/dev/null 2>&1; then
-    kubectl --context "$ctx" apply -f "$SEMANTIC_MANIFESTS/envoy-extproc-pools.yaml"
+    kubectl --context "$ctx" apply --server-side --force-conflicts -f "$SEMANTIC_MANIFESTS/envoy-extproc-pools.yaml"
   else
-    kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-chat-extproc-pools.yaml"
+    kubectl --context "$ctx" apply --server-side --force-conflicts -f "$LLMD_MANIFESTS/envoy-chat-extproc-pools.yaml"
   fi
-  kubectl --context "$ctx" apply -f "$LLMD_MANIFESTS/envoy-task-extproc-pools.yaml"
+  kubectl --context "$ctx" apply --server-side --force-conflicts -f "$LLMD_MANIFESTS/envoy-task-extproc-pools.yaml"
 fi
 
 # The shared route is applied in the same transaction as four

@@ -7,9 +7,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CTX="$1"
 [[ "$CTX" == kind-ai-gw-kuadrant ]] || { echo "install-kuadrant.sh only supports kind-ai-gw-kuadrant" >&2; exit 2; }
 GWAPI_VERSION="${GWAPI_VERSION:-1.4.1}"
-GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
-ISTIO_VERSION="${ISTIO_VERSION:-1.29.2}"
-KUADRANT_VERSION="${KUADRANT_VERSION:-1.5.2}"
+GAIE_VERSION="${GAIE_VERSION:-v1.6.0}"
+ISTIO_VERSION="${ISTIO_VERSION:-1.30.5}"
+KUADRANT_VERSION="${KUADRANT_VERSION:-1.5.3}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.17.0}"
 KUADRANT_CHART="$ROOT/kuadrant/charts/kuadrant-operator-${KUADRANT_VERSION}.tgz"
 
