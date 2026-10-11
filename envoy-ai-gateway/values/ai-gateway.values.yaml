@@ -1,5 +1,5 @@
-# Overlay for ai-gateway-helm v1.0.0 on a single-node kind cluster.
-# Defaults live in ai-gateway-helm-v1.0.0.default.yaml -- only deltas here.
+# Overlay for ai-gateway-helm v1.2.0 on a single-node kind cluster.
+# Defaults live in ai-gateway-helm-v1.2.0.default.yaml -- only deltas here.
 
 controller:
   logLevel: info

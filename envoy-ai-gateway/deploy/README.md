@@ -1,5 +1,10 @@
 # Envoy AI Gateway cluster deployment
 
+Gateway charts and the root README live comparison were refreshed on
+2026-10-10. Detailed causal observations below remain August evidence; see
+the root README and `docs/local-gateway-tests-2026-10-10.md` for fresh probe
+results, current pins, and upgrade details.
+
 This directory is the complete Kubernetes YAML inventory for
 `ai-gw-envoy`. It does not import manifests from either gateway tree. Shared
 components are intentionally repeated so this cluster can be inspected from

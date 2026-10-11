@@ -279,6 +279,60 @@ def probe_tenants(cfg: dict, cluster: str) -> dict:
     }
 
 
+def probe_catalog_exclusion(cfg: dict, cluster: str) -> str:
+    """Toggle discovery visibility, prove routing survives, restore the rule."""
+    if cluster != "ai-gw-envoy":
+        return "Not configured in this profile"
+    route_name = "aigatewayroute/kserve-mock-native"
+    route = kube_json(cfg, "ai-demo", route_name)
+    if not route:
+        return "Native overlay not installed"
+    matched = next((
+        (index, rule) for index, rule in enumerate(route["spec"]["rules"])
+        if any(header.get("value") == "qwen3.8-27b"
+               for match in rule.get("matches", []) for header in match.get("headers", []))
+    ), None)
+    if matched is None:
+        return "Probe model not configured in native route"
+    index, rule = matched
+    model = "qwen3.8-27b"
+    access_token = token(cfg, "alice")
+    path = f"/spec/rules/{index}/excludeFromModelsEndpoint"
+
+    def patch(value: bool) -> None:
+        kubectl(cfg, "-n", "ai-demo", "patch", route_name, "--type=json", "-p",
+                json.dumps([{"op": "add", "path": path, "value": value}]))
+
+    def catalog_has(want: bool) -> bool:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            code, body, _ = json_call(cfg, "/v1/models", access_token,
+                                      extra_headers={"host": NATIVE_HOST})
+            ids = {item.get("id") for item in body.get("data", [])}
+            if code == 200 and ids and (model in ids) == want:
+                return True
+            time.sleep(2)
+        return False
+
+    try:
+        patch(False)
+        visible = catalog_has(True)
+        patch(True)
+        hidden = catalog_has(False)
+        code, _, _ = json_call(cfg, "/v1/chat/completions", access_token,
+                               {**CHAT, "model": model}, {"host": NATIVE_HOST})
+    finally:
+        if "excludeFromModelsEndpoint" in rule:
+            patch(rule["excludeFromModelsEndpoint"])
+        else:
+            kubectl(cfg, "-n", "ai-demo", "patch", route_name, "--type=json", "-p",
+                    json.dumps([{"op": "remove", "path": path}]))
+        restored = catalog_has(not rule.get("excludeFromModelsEndpoint", False))
+    if visible and hidden and code == 200 and restored:
+        return f"Passed: {model} hidden; chat 200; catalog restored"
+    return f"Failed: visible={visible}, hidden={hidden}, chat={code}, restored={restored}"
+
+
 def probe_shared_across_routes(cfg: dict, cluster: str) -> str:
     """Check that a tenant bucket spans both inference routes, not one each.
 
@@ -941,13 +995,13 @@ def run(cluster: str, sample_count: int) -> dict:
             )
         result["request_limit"] = probe_limit(cfg, access_token, ("x-rate-limit-probe", "true"), 8)
         bob_rate, _, _ = json_call(cfg, "/v1/chat/completions", bob, CHAT, {"x-rate-limit-probe": "true"})
-        expected_bob = 200 if cluster == "ai-gw-envoy" else 429
+        expected_bob = 429 if cluster == "ai-gw-kuadrant" else 200
         result["rate_scope"] = (
             ("per-user; Bob HTTP 200" if expected_bob == 200 else "shared; Bob HTTP 429")
             if bob_rate == expected_bob else f"Unexpected Bob HTTP {bob_rate}"
         )
         result["quota_limit"] = probe_limit(cfg, access_token, ("x-quota-probe", f"probe-{int(time.time())}"), 6)
-        if cluster in ("ai-gw-kuadrant", "ai-gw-agent") and str(result["quota_limit"]).startswith("429"):
+        if cluster == "ai-gw-kuadrant" and str(result["quota_limit"]).startswith("429"):
             result["quota_limit"] += "; shared bucket"
         # Model access is independent of org and team: only the token's tier
         # ceiling matters. Carol is big and Dave is medium.
@@ -987,13 +1041,7 @@ def run(cluster: str, sample_count: int) -> dict:
             result["native_spoof"] = probe_native_spoof(cfg, cluster, access_token)
             result["native_tier_ceiling"] = probe_native_tier_ceiling(cfg)
             result["native_gaps"] = probe_native_gaps(cfg, access_token)
-        if cluster == "ai-gw-agent":
-            result.update({
-                "tenant_nesting": "Needs an external rate limit service",
-                "tenant_header_spoof": "Not applicable without tenant buckets",
-            })
-        else:
-            result.update(probe_tenants(cfg, cluster))
+        result.update(probe_tenants(cfg, cluster))
         result["tenant_route_scope"] = probe_shared_across_routes(cfg, cluster)
         if cluster == "ai-gw-agent":
             result["token_limit"] = "Not available on KServe InferencePool"
@@ -1004,6 +1052,11 @@ def run(cluster: str, sample_count: int) -> dict:
     else:
         for key in ("authentication", "task_authentication", "identity_headers", "authorization", "tier_authorization", "tier_ceiling", "tier_independent_of_tenant", "request_limit", "rate_scope", "quota_limit", "tenant_nesting", "tenant_header_spoof", "tenant_route_scope", "token_limit", "native_routing", "native_spoof", "native_tier_ceiling", "native_gaps"):
             result[key] = "No policy" if not policies_present else "Token error"
+
+    result["catalog_exclusion"] = (
+        probe_catalog_exclusion(cfg, cluster)
+        if not policies_present or access_token else "Token error"
+    )
 
     code, _, cors_headers = request(
         cfg["base"] + "/v1/chat/completions", method="OPTIONS",

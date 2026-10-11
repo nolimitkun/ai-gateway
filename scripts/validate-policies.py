@@ -23,11 +23,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Charts that carry the CRDs the manifests below are written against.
 CHARTS = (
-    "kuadrant/charts/kuadrant-operator-1.5.2.tgz",
-    "kuadrant/charts/base-1.29.2.tgz",
-    "envoy-ai-gateway/charts/ai-gateway-crds-helm-v1.0.0.tgz",
-    "envoy-ai-gateway/charts/gateway-helm-v1.8.1.tgz",
-    "agentgateway/charts/agentgateway-crds-v1.4.1.tgz",
+    "kuadrant/charts/kuadrant-operator-1.5.3.tgz",
+    "kuadrant/charts/base-1.30.5.tgz",
+    "envoy-ai-gateway/charts/ai-gateway-crds-helm-v1.2.0.tgz",
+    "envoy-ai-gateway/charts/gateway-helm-v1.9.2.tgz",
+    "agentgateway/charts/agentgateway-crds-v1.6.0.tgz",
     "kserve/charts/kserve-llmisvc-crd-v0.20.0.tgz",
     "kserve/charts/cert-manager-v1.17.0.tgz",
 )

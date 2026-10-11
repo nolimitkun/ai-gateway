@@ -3,20 +3,14 @@
 # budget is per proxy instance and the coarsest local window is an hour, so a
 # daily quota needs the global (external) rate limit service instead.
 #
-# Nested org/team/user buckets are not expressible here, and the reason is
-# sharper than "local buckets take no key" -- though that is also true: a
-# `local` entry carries only requests/tokens/unit/burst, with no key field at
-# all. The `conditional` wrapper does take CEL, so enumerating tenants as
-# conditions looks like a way out. It is not: only "the first matching policy
-# will be executed", and first-match-wins cannot charge an org bucket and a
-# team bucket for the same request. Note that the `authorization` rules in
-# auth-policy.yaml are cumulative -- this API mixes both semantics.
-#
-# `rateLimit.global` does nest, and is the best-specified of the three stacks
-# for it: descriptor entries are CEL, and so is the per-descriptor cost. But
-# `global.backendRef` is required, and this repository deploys a rate limit
-# service for Envoy Gateway only. So the gap is a deployment task rather than
-# a capability gap, and the comparison reports it as one.
+# Version 1.6 supports CEL keys on each local rule. Multiple rules in the
+# selected conditional policy charge org and team buckets for one request.
+# Identity keys use verified JWT claims, never client identity headers.
+# The fixture explicitly maps preferred_username; sub is absent from its
+# custom client scope and would fall into the shared missing-key bucket.
+# These remain bounded, in-memory counters per proxy; replicas do not share
+# budgets and eviction/restarts can reset them. Global mode is needed for
+# distributed or durable quotas. Probe headers only isolate test windows.
 #
 # Token units require an agentgateway AI backend with tokenization enabled.
 # KServe's InferencePool integration is a generic Gateway API backend and does
@@ -40,8 +34,19 @@ spec:
             local:
               - requests: 5
                 unit: Minutes
+                key: jwt.preferred_username
         - condition: '"x-quota-probe" in request.headers'
           policy:
             local:
               - requests: 3
                 unit: Hours
+                key: jwt.preferred_username + ":" + request.headers["x-quota-probe"]
+        - condition: '"x-tenant-probe" in request.headers'
+          policy:
+            local:
+              - requests: 5
+                unit: Hours
+                key: jwt.org + ":" + request.headers["x-tenant-probe"]
+              - requests: 3
+                unit: Hours
+                key: jwt.org + ":" + jwt.team + ":" + request.headers["x-tenant-probe"]

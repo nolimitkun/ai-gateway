@@ -127,8 +127,9 @@ def main() -> int:
         mapper.get("config", {}).get("claim.name")
         for scope in realm.get("clientScopes", [])
         for mapper in scope.get("protocolMappers", [])
+        if mapper.get("config", {}).get("access.token.claim") == "true"
     }
-    for claim in ("tier", "org", "team", "group_paths"):
+    for claim in ("tier", "org", "team", "group_paths", "preferred_username"):
         if claim not in mappers:
             problems.append(f"the realm emits no '{claim}' claim")
 
@@ -158,6 +159,27 @@ def main() -> int:
         for counter in limit.get("counters", []):
             if '"' in counter.get("expression", ""):
                 problems.append(f"Kuadrant '{name}' counter contains an unsafe double quote")
+
+    agent = documents(ROOT / "agentgateway/deploy/policies/rate-limit.yaml")[0]
+    conditional = agent["spec"]["traffic"]["rateLimit"]["conditional"]
+    user_rules = [p["policy"]["local"][0] for p in conditional
+                  if '"x-rate-limit-probe"' in p["condition"] or '"x-quota-probe"' in p["condition"]]
+    expected_user_keys = [
+        'jwt.preferred_username',
+        'jwt.preferred_username + ":" + request.headers["x-quota-probe"]',
+    ]
+    if [rule.get("key") for rule in user_rules] != expected_user_keys:
+        problems.append("agentgateway user limits must use the fixture's mapped username claim")
+    tenants = [p for p in conditional if p["condition"] == '"x-tenant-probe" in request.headers']
+    expected_keys = [
+        'jwt.org + ":" + request.headers["x-tenant-probe"]',
+        'jwt.org + ":" + jwt.team + ":" + request.headers["x-tenant-probe"]',
+    ]
+    rules = tenants[0]["policy"]["local"] if len(tenants) == 1 else []
+    if [r.get("requests") for r in rules] != [org_cap, team_cap]:
+        problems.append("agentgateway local tenant caps differ from harness caps")
+    if [r.get("key") for r in rules] != expected_keys:
+        problems.append("agentgateway tenant keys must use verified org/team claims and probe scope")
 
     for problem in problems:
         print(problem, file=sys.stderr)

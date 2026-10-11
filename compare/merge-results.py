@@ -21,6 +21,7 @@ ROWS = (
     ("Streaming usage chunk", "streaming_usage"),
     ("Streaming `[DONE]` termination", "stream_termination"),
     ("Model catalog (`GET /v1/models`)", "model_catalog"),
+    ("Hide model alias while preserving routing", "catalog_exclusion"),
     ("Tiered chat models", "tiered_chat"),
     ("Embeddings API", "embeddings"),
     ("RAG embedding models", "rag_embeddings"),
